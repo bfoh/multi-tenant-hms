@@ -64,7 +64,42 @@ export class HotelSettingsService {
         .single()
 
       if (error || !data) {
-        console.log(`⚠️ Tenants table missed domain '${hostname}', using fallback settings`)
+        console.log(`⚠️ Tenants table missed domain '${hostname}', trying JWT tenant_id fallback...`)
+
+        // Second attempt: use the authenticated user's app_metadata.tenant_id
+        const { data: sessionData } = await supabase.auth.getSession()
+        const tenantId = sessionData?.session?.user?.app_metadata?.tenant_id
+
+        if (tenantId) {
+          const { data: tenantData, error: tenantError } = await supabase
+            .from('tenants')
+            .select('*')
+            .eq('id', tenantId)
+            .single()
+
+          if (!tenantError && tenantData) {
+            this.settings = {
+              id: tenantData.id,
+              name: tenantData.name,
+              address: tenantData.address || '',
+              phone: tenantData.phone || '',
+              email: tenantData.email || '',
+              website: tenantData.domain,
+              logoUrl: tenantData.logo_url,
+              taxRate: tenantData.tax_rate || 0.10,
+              currency: tenantData.currency || 'USD',
+              managerEmail: tenantData.manager_email,
+              managerPhone: tenantData.manager_phone,
+              managerNotificationsEnabled: tenantData.manager_notifications_enabled !== false,
+              createdAt: tenantData.created_at || new Date().toISOString(),
+              updatedAt: tenantData.updated_at || new Date().toISOString()
+            }
+            console.log('✅ [HotelSettings] Loaded tenant via JWT fallback:', this.settings.name)
+            return this.settings
+          }
+        }
+
+        console.log('⚠️ [HotelSettings] JWT fallback also failed, using local fallback settings')
         this.settings = FALLBACK_SETTINGS
         return this.settings
       }

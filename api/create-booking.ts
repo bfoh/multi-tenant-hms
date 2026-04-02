@@ -1,4 +1,5 @@
 import { supabaseAdmin, resolveTenant } from './_utils'
+import { sendEmailForTenant, sendSmsForTenant } from './_send-helpers'
 import PDFDocument from 'pdfkit'
 import { Buffer } from 'node:buffer'
 
@@ -193,26 +194,27 @@ export default async function handler(req: any, res: any) {
 
         if (bErr) throw bErr;
 
-        // 4. Notifications
-        const baseUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : `http://${req.headers.host}`;
+        // 4. Notifications — call helpers directly to avoid losing tenant context across HTTP
         const promises = [];
 
         if (guestPhone) {
-            promises.push(fetch(`${baseUrl}/api/send-sms`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'X-Tenant-Id': tenant.id },
-                body: JSON.stringify({ to: guestPhone, message: `Confirmed: ${tenant.name} Room ${availableRoom.room_number}` })
-            }));
+            promises.push(
+                sendSmsForTenant(tenant, guestPhone, `Confirmed: ${tenant.name} Room ${availableRoom.room_number}`)
+                    .catch((e: any) => console.error('[create-booking] SMS failed:', e.message))
+            );
         }
 
         if (guestEmail) {
             const pdf = await generatePreInvoicePdfBuffer(tenant, { guestName, guestPhone, guestEmail, roomNumber: availableRoom.room_number, checkIn, checkOut, nights, totalPrice });
             const html = generateEmailHtml({ tenant, title: 'Booking Confirmed', content: `<p>Reservation for Room ${availableRoom.room_number} is confirmed.</p>` });
-            promises.push(fetch(`${baseUrl}/api/send-email`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'X-Tenant-Id': tenant.id },
-                body: JSON.stringify({ to: guestEmail, subject: 'Booking Confirmation', html, attachments: [{ filename: 'Invoice.pdf', content: pdf, contentType: 'application/pdf' }] })
-            }));
+            promises.push(
+                sendEmailForTenant(tenant, {
+                    to: guestEmail,
+                    subject: 'Booking Confirmation',
+                    html,
+                    attachments: [{ filename: 'Invoice.pdf', content: pdf as string, contentType: 'application/pdf' }]
+                }).catch((e: any) => console.error('[create-booking] Email failed:', e.message))
+            );
         }
 
         await Promise.all(promises);
