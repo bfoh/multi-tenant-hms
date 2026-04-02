@@ -26,8 +26,8 @@ function buildProxyFetch(directUrl: string) {
             : input instanceof URL ? input.href
             : (input as Request).url
 
-        // Rewrite Supabase URLs → Netlify function proxy
-        if (import.meta.env.PROD && fetchUrl.startsWith(directUrl)) {
+        // Rewrite Supabase URLs → Vercel proxy (disabled for debugging - re-enable if geo-routing needed)
+        if (false && import.meta.env.PROD && fetchUrl.startsWith(directUrl)) {
             try {
                 const parsed = new URL(fetchUrl)
                 const proxyUrl = new URL('/api/supabase-proxy', window.location.origin)
