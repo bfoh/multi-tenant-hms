@@ -38,6 +38,7 @@ export function OnsiteBookingPage() {
     roomId: string
     roomNumber: string
     price: number
+    totalPrice?: number
     checkIn: Date
     checkOut: Date
     numGuests: number
@@ -104,7 +105,7 @@ export function OnsiteBookingPage() {
           filteredTypes.find((rt) => rt.id === prop.propertyTypeId) ||
           filteredTypes.find((rt) => (rt.name || '').toLowerCase() === (prop.propertyType || '').toLowerCase())
         // Ensure we check both basePrice (from wrapper) and base_price (fallback)
-        const resolvedPrice = Number(matchingType?.basePrice || matchingType?.base_price) || Number(prop.basePrice || prop.base_price) || Number(prop.price) || 0
+        const resolvedPrice = Number(matchingType?.basePrice || (matchingType as any)?.base_price) || Number(prop.basePrice || prop.base_price) || Number(prop.price) || 0
         return {
           ...prop,
           roomTypeName: matchingType?.name || prop.propertyType || '',
@@ -286,13 +287,15 @@ export function OnsiteBookingPage() {
       return
     }
 
+    const roomPrice = Number(roomType.basePrice || (roomType as any).base_price) || 0
     setCart([...cart, {
       id: Math.random().toString(36).substr(2, 9),
       roomTypeId: roomType.id,
       roomTypeName: roomType.name,
       roomId: roomObj.id,
       roomNumber: availableProperty.roomNumber,
-      price: Number(roomType.basePrice || (roomType as any).base_price) || 0,
+      price: roomPrice,
+      totalPrice: roomPrice, // Sync both fields
       checkIn: checkIn as Date,
       checkOut: checkOut as Date,
       numGuests: numGuests
@@ -359,7 +362,7 @@ export function OnsiteBookingPage() {
           source: 'reception' as const,
           payment: {
             method: primaryPaymentMethod,
-            status: paymentType === 'full' ? 'completed' : 'pending',
+            status: (paymentType === 'full' ? 'completed' : 'pending') as 'pending' | 'completed' | 'failed',
             amount: paymentType === 'full' ? itemTotal : (paymentType === 'part' ? splitsPaidTotal : 0),
             reference: `PAY-${Date.now()}-${index}`,
             paidAt: paymentType !== 'pending' ? new Date().toISOString() : undefined

@@ -88,6 +88,7 @@ export interface CartItem {
   checkOut: Date
   numGuests: number
   price: number
+  totalPrice?: number
   guest?: {
     name: string
     email?: string // Optional for secondary guests

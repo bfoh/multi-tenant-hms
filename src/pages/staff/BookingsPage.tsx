@@ -126,15 +126,15 @@ export function BookingsPage() {
     const nights = calculateNights(formData.checkIn, formData.checkOut)
     const selectedRoomType = roomTypes.find((rt: any) => rt.id === (selectedProperty.roomTypeId || selectedProperty.propertyTypeId))
     const pricePerNight = Number(selectedRoomType?.basePrice || selectedRoomType?.base_price) || Number(selectedProperty._resolvedPrice) || Number(selectedProperty.price) || Number(selectedProperty.basePrice) || 0
-    console.log('[BookingsPage] Price calc - roomTypeId:', selectedProperty.roomTypeId, 'roomType:', selectedRoomType?.name, 'basePrice:', selectedRoomType?.basePrice, '_resolvedPrice:', selectedProperty._resolvedPrice, 'price:', selectedProperty.price, 'pricePerNight:', pricePerNight)
     const calculatedPrice = nights * pricePerNight
+    console.log(`[BookingsPage] Calculated price: ${calculatedPrice} (nights: ${nights}, pricePerNight: ${pricePerNight})`)
 
     setFormData(prev => {
       let newSplits = prev.paymentSplits
       if (prev.paymentType === 'full' && newSplits.length === 1) {
         newSplits = [{ ...newSplits[0], amount: calculatedPrice }]
       }
-      return { ...prev, totalPrice: calculatedPrice, paymentSplits: newSplits }
+      return { ...prev, totalPrice: calculatedPrice, amount: calculatedPrice, paymentSplits: newSplits }
     })
   }, [formData.propertyId, formData.checkIn, formData.checkOut, properties, roomTypes])
 
@@ -163,9 +163,17 @@ export function BookingsPage() {
 
       // Convert snake_case and embed resolved price directly from joined room_type
       const enrichedRooms = rawRooms.map((room: any) => {
+        // Handle array or object from Supabase join
         const rt = Array.isArray(room.room_types) ? room.room_types[0] : (room.room_types || {})
         const roomTypeName = rt.name || room.room_type || room.propertyType || ''
         
+        // Robust price resolution - check snake_case and camelCase on both room and joined room_type
+        const pricePerNight = Number(rt.base_price || rt.basePrice) || Number(room.price) || 0
+        
+        if (pricePerNight === 0) {
+          console.warn(`[BookingsPage] Warning: Room ${room.room_number} has 0.00 price. Join data:`, JSON.stringify(rt))
+        }
+
         return {
           id: room.id,
           roomNumber: room.room_number,
@@ -175,7 +183,7 @@ export function BookingsPage() {
           status: room.status,
           price: room.price,
           tenantId: room.tenant_id,
-          _resolvedPrice: Number(rt.base_price || rt.basePrice) || Number(room.price) || 0,
+          _resolvedPrice: pricePerNight,
           _roomTypeName: rt.name || roomTypeName,
         }
       })
@@ -184,13 +192,13 @@ export function BookingsPage() {
 
       // Build room type map from joined data (for booking list display)
       const roomTypeMap = new Map<string, string>(
-        enrichedRooms.map((r: any) => [r.roomTypeId, r._roomTypeName]).filter(([k]: any) => k)
+        enrichedRooms.filter((r: any) => r.roomTypeId).map((r: any) => [r.roomTypeId, r._roomTypeName] as [string, string])
       )
       const roomTypesData = Array.from(
-        new Map(enrichedRooms.filter((r: any) => r.roomTypeId).map((r: any) => [r.roomTypeId, { id: r.roomTypeId, name: r._roomTypeName, basePrice: r._resolvedPrice }])).values()
+        new Map(enrichedRooms.filter((r: any) => r.roomTypeId).map((r: any) => [r.roomTypeId, { id: r.roomTypeId, name: r._roomTypeName, basePrice: r._resolvedPrice }] as [string, any])).values()
       )
       const propertyTypeByRoomNumber = new Map<string, string>(
-        enrichedRooms.map((r: any) => [r.roomNumber, r.roomTypeId])
+        enrichedRooms.map((r: any) => [r.roomNumber, r.roomTypeId] as [string, string])
       )
 
       // Transform to UI format and deduplicate
@@ -218,7 +226,7 @@ export function BookingsPage() {
           checkOut: b.dates.checkOut,
           status: b.status,
           source: b.source,
-          totalPrice: b.amount,
+          totalPrice: Number(b.amount || b.totalPrice || 0),
           numGuests: b.numGuests,
           nights,
           paymentMethod: b.payment_method || b.paymentMethod || 'Not paid',
@@ -311,7 +319,7 @@ export function BookingsPage() {
 
       // Recalculate price here at submit time — never trust formData.totalPrice (stale closure risk)
       const nights = calculateNights(formData.checkIn, formData.checkOut)
-      const pricePerNight = Number(selectedRoomType?.basePrice) || Number(selectedProperty._resolvedPrice) || Number(selectedProperty.price) || 0
+      const pricePerNight = Number(selectedRoomType?.basePrice || selectedRoomType?.base_price) || Number(selectedProperty?._resolvedPrice) || Number(selectedProperty?.price) || Number(selectedProperty?.basePrice) || 0
       const calculatedTotalPrice = nights * pricePerNight
       console.log('[BookingsPage] handleSubmit price recalc - roomTypeId:', selectedProperty.roomTypeId, 'roomType:', selectedRoomType?.name, 'basePrice:', selectedRoomType?.basePrice, '_resolvedPrice:', selectedProperty._resolvedPrice, 'nights:', nights, 'pricePerNight:', pricePerNight, 'total:', calculatedTotalPrice)
       console.log('[BookingsPage] Room type:', roomTypeName, 'roomTypeId:', selectedProperty.roomTypeId, 'totalPrice from state:', formData.totalPrice, 'recalculated:', calculatedTotalPrice)
@@ -389,7 +397,7 @@ export function BookingsPage() {
         await activityLogService.log({
           action: 'created',
           entityType: 'booking',
-          entityId: result?.id || result?._id || 'unknown',
+          entityId: result?._id || 'unknown',
           details: {
             guestName: formData.guestName,
             guestEmail: formData.guestEmail,

@@ -23,6 +23,7 @@ export interface LocalBooking {
   }
   numGuests: number
   amount: number
+  totalPrice?: number
   status: 'reserved' | 'confirmed' | 'cancelled' | 'checked-in' | 'checked-out'
   source: 'online' | 'reception'
   synced: boolean
@@ -431,8 +432,8 @@ class BookingEngine {
       checkOut: bookingData.dates.checkOut,
       status: bookingData.status,
       source: bookingData.source,
-      totalPrice: (Number(bookingData.amount) > 0) 
-        ? bookingData.amount 
+      totalPrice: Number(bookingData.amount || bookingData.totalPrice || 0) > 0 
+        ? Number(bookingData.amount || bookingData.totalPrice) 
         : await (async () => {
             const nights = calculateNights(bookingData.dates.checkIn, bookingData.dates.checkOut)
             let pricePerNight = Number(room.price) || 0
@@ -447,9 +448,10 @@ class BookingEngine {
               }
             }
             
-            console.log(`[BookingEngine] Amount was 0, resolved price: ${pricePerNight} * ${nights} nights`)
+            console.log(`[BookingEngine] Resolving price for ${room.roomNumber}: ${pricePerNight} * ${nights} nights`)
             return pricePerNight * nights
           })() || 0,
+      amount: Number(bookingData.amount || bookingData.totalPrice || 0), // Include legacy amount for compatibility
       numGuests: bookingData.numGuests ?? 1,
       paymentMethod: bookingData.paymentMethod || bookingData.payment_method,
       specialRequests: specialRequests
@@ -1269,9 +1271,10 @@ class BookingEngine {
       }
 
       const discountAmt = Number(b.discountAmount || b.discount_amount || 0)
+      const totalPrice = Number(b.totalPrice || b.total_price || 0)
       const effectiveAmount = (b.finalAmount != null || b.final_amount != null)
         ? Number(b.finalAmount ?? b.final_amount ?? 0)
-        : Math.max(0, Number(b.totalPrice || 0) - discountAmt)
+        : Math.max(0, totalPrice - discountAmt)
 
       const local: LocalBooking = {
         _id: localId,
