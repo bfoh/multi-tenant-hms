@@ -414,13 +414,18 @@ export function EmployeesPage() {
         console.log('👤 [EmployeesPage] Creating user account with Supabase Auth...')
 
         let newUser: { id: string; email: string } | null = null
+        let staffCreatedByApi = false
 
-        // First, try using the Netlify function (production) - uses Admin API
+        // First, try using the API function (production) - uses Admin API
         try {
-          console.log('📡 [EmployeesPage] Calling Netlify function to create auth user...')
+          console.log('📡 [EmployeesPage] Calling API to create employee...')
+          const { data: { session } } = await supabase.auth.getSession()
           const response = await fetch('/api/create-employee', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+              'Content-Type': 'application/json',
+              ...(session?.access_token ? { 'Authorization': `Bearer ${session.access_token}` } : {})
+            },
             body: JSON.stringify({
               email: values.email,
               password: defaultPassword,
@@ -430,7 +435,7 @@ export function EmployeesPage() {
             })
           })
 
-          console.log('📡 [EmployeesPage] Netlify function response status:', response.status)
+          console.log('📡 [EmployeesPage] API response status:', response.status)
 
           if (response.status === 409) {
             console.warn('❌ [EmployeesPage] User already exists (409)')
@@ -439,26 +444,24 @@ export function EmployeesPage() {
               description: 'An account with this email already exists in the system.',
               variant: 'destructive',
             })
-            // Remove optimistic entry
             setEmployees((prev) => prev.filter(e => e.id !== staffId))
             return
           }
 
           if (response.ok) {
             const result = await response.json()
-            console.log('📡 [EmployeesPage] Netlify function result:', result)
+            console.log('📡 [EmployeesPage] API result:', result)
             if (result.success && result.user?.id) {
               newUser = result.user
-              console.log('✅ [EmployeesPage] User created via Netlify function:', newUser.id)
-            } else {
-              console.error('❌ [EmployeesPage] Netlify function returned success:false or no user:', result)
+              staffCreatedByApi = true // staff record already created by API
+              console.log('✅ [EmployeesPage] Employee created via API:', newUser.id)
             }
           } else {
             const errorResult = await response.text()
-            console.error('❌ [EmployeesPage] Netlify function failed with status', response.status, ':', errorResult)
+            console.error('❌ [EmployeesPage] API failed with status', response.status, ':', errorResult)
           }
-        } catch (netlifyError) {
-          console.error('❌ [EmployeesPage] Netlify function error:', netlifyError)
+        } catch (apiError) {
+          console.error('❌ [EmployeesPage] API error:', apiError)
         }
 
         // Fallback: Use direct Supabase signUp (for local development)
@@ -531,28 +534,30 @@ export function EmployeesPage() {
           // Don't fail the entire operation, but log the warning
         }
 
-        // Create staff record
-        console.log('👥 [EmployeesPage] Creating staff record...')
-        const { data: newStaff, error: staffError } = await supabase
-          .from('staff')
-          .insert({
-            id: staffId,
-            user_id: newUser.id,
-            name: values.name,
-            email: values.email,
-            phone: values.phone || null,
-            role: values.role,
-            created_at: new Date().toISOString(),
-          })
-          .select()
-          .single()
+        // Create staff record only if the API didn't already create it
+        if (!staffCreatedByApi) {
+          console.log('👥 [EmployeesPage] Creating staff record...')
+          const { data: newStaff, error: staffError } = await supabase
+            .from('staff')
+            .insert({
+              id: staffId,
+              user_id: newUser.id,
+              name: values.name,
+              email: values.email,
+              phone: values.phone || null,
+              role: values.role,
+              created_at: new Date().toISOString(),
+            })
+            .select()
+            .single()
 
-        if (staffError) {
-          console.error('❌ [EmployeesPage] Staff record creation error:', staffError)
-          throw staffError
+          if (staffError) {
+            console.error('❌ [EmployeesPage] Staff record creation error:', staffError)
+            throw staffError
+          }
+
+          console.log('✅ [EmployeesPage] Staff record created:', newStaff)
         }
-
-        console.log('✅ [EmployeesPage] Staff record created:', newStaff)
 
         // Log employee creation to activity logs
         try {

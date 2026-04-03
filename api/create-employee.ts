@@ -4,7 +4,27 @@ export default async function handler(req: any, res: any) {
     if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
 
     try {
-        const tenant = await resolveTenant(req)
+        // Try domain-based tenant lookup first, then fall back to JWT
+        let tenant = await resolveTenant(req)
+
+        if (!tenant) {
+            // Extract tenant_id from caller's Authorization JWT
+            const authHeader = req.headers['authorization'] || ''
+            const token = authHeader.replace('Bearer ', '')
+            if (token) {
+                const { data: { user } } = await supabaseAdmin.auth.getUser(token)
+                const tenantId = user?.app_metadata?.tenant_id
+                if (tenantId) {
+                    const { data } = await supabaseAdmin
+                        .from('tenants')
+                        .select('*')
+                        .eq('id', tenantId)
+                        .single()
+                    tenant = data
+                }
+            }
+        }
+
         if (!tenant) return res.status(400).json({ error: 'Could not resolve tenant' })
 
         const { email, password, name, role, phone } = req.body
@@ -13,7 +33,7 @@ export default async function handler(req: any, res: any) {
             return res.status(400).json({ error: 'email, password, and name are required' })
         }
 
-        // Create auth user — Supabase returns an error if email already exists
+        // Create auth user with tenant_id in app_metadata
         const { data, error } = await supabaseAdmin.auth.admin.createUser({
             email,
             password,
@@ -38,18 +58,33 @@ export default async function handler(req: any, res: any) {
 
         const userId = data.user.id
 
-        // Create user profile record (ignore error if already exists)
+        // Create user profile record
         await supabaseAdmin.from('users').insert({
             id: userId,
             email,
             first_login: 1,
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString()
-        }).select()
+        })
+
+        // Create staff record directly (bypasses RLS using service role)
+        const staffId = `staff-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+        await supabaseAdmin.from('staff').insert({
+            id: staffId,
+            user_id: userId,
+            name,
+            email,
+            phone: phone || null,
+            role: role || 'staff',
+            tenant_id: tenant.id,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+        })
 
         return res.status(200).json({
             success: true,
-            user: { id: userId, email }
+            user: { id: userId, email },
+            staffId
         })
 
     } catch (err: any) {
