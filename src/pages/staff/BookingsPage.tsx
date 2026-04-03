@@ -159,7 +159,18 @@ export function BookingsPage() {
       }
 
       const rawRooms = roomsResult.data || []
-      console.log('[BookingsPage] rawRooms count:', rawRooms.length, 'sample:', JSON.stringify(rawRooms.slice(0, 1)))
+      console.log('[BookingsPage] rawRooms count:', rawRooms.length)
+
+      // STATIC FALLBACK RATES - Final line of defense if DB joins fail
+      const STATIC_RATES: Record<string, number> = {
+        'executive': 350,
+        'deluxe': 300,
+        'standard': 250,
+        'economy': 200,
+        'vip': 500,
+        'double': 350,
+        'single': 200
+      }
 
       // Convert snake_case and embed resolved price directly from joined room_type
       const enrichedRooms = rawRooms.map((room: any) => {
@@ -215,13 +226,22 @@ export function BookingsPage() {
         }
 
         // Price recovery safety net - if persisted price is 0, recalculate from room data
-        let totalPrice = Number(b.totalPrice || b.amount || 0)
+        let totalPrice = Number(b.totalPrice || b.amount || b.total_price || 0)
         if (totalPrice === 0 && nights > 0) {
           const room = enrichedRooms.find(r => r.roomNumber === b.roomNumber)
-          const pricePerNight = room?._resolvedPrice || 0
+          let pricePerNight = room?._resolvedPrice || 0
+          
+          // HARD FALLBACK: If join failed, try static lookup based on room name/type
+          if (pricePerNight === 0) {
+            const typeStr = (roomTypeName || b.roomType || '').toLowerCase()
+            Object.entries(STATIC_RATES).forEach(([key, rate]) => {
+              if (typeStr.includes(key)) pricePerNight = rate
+            })
+          }
+
           if (pricePerNight > 0) {
             totalPrice = nights * pricePerNight
-            console.log(`[BookingsPage] Price Recovery triggered for ${b.guest?.fullName || 'Guest'}: ${nights} nights * ${pricePerNight} = ${totalPrice}`)
+            console.log(`[BookingsPage] DEEP RECOVERY: ${b.guest?.fullName} => ${nights} nights * ${pricePerNight} = ${totalPrice}`)
           }
         }
 

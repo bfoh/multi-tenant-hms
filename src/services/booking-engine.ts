@@ -424,6 +424,26 @@ class BookingEngine {
       console.log('[BookingEngine Debug] Attached Payment Data:', JSON.stringify(paymentTrackingData, null, 2))
     }
 
+    const calculatedPrice = (Number(bookingData.amount || bookingData.totalPrice || 0) > 0)
+      ? Number(bookingData.amount || bookingData.totalPrice)
+      : await (async () => {
+          const nights = calculateNights(bookingData.dates.checkIn, bookingData.dates.checkOut)
+          let pricePerNight = Number(room.price) || 0
+          
+          if (pricePerNight === 0 && room.roomTypeId) {
+            try {
+              const rt = await db.roomTypes.get(room.roomTypeId)
+              pricePerNight = Number(rt?.basePrice || rt?.base_price) || 0
+            } catch (rtErr) {
+              console.warn('[BookingEngine] Failed to fetch room type fallback:', rtErr)
+            }
+          }
+          console.log(`[BookingEngine] Resolving price for ${room.roomNumber}: ${pricePerNight} * ${nights} nights`)
+          return pricePerNight * nights
+        })() || 0
+
+    const finalTotalPrice = Number(calculatedPrice)
+
     const bookingPayload = {
       userId: currentUser?.id || null,
       guestId,
@@ -432,31 +452,14 @@ class BookingEngine {
       checkOut: bookingData.dates.checkOut,
       status: bookingData.status,
       source: bookingData.source,
-      totalPrice: Number(bookingData.amount || bookingData.totalPrice || 0) > 0 
-        ? Number(bookingData.amount || bookingData.totalPrice) 
-        : await (async () => {
-            const nights = calculateNights(bookingData.dates.checkIn, bookingData.dates.checkOut)
-            let pricePerNight = Number(room.price) || 0
-            
-            // If room price is 0, try to fetch from its room type
-            if (pricePerNight === 0 && room.roomTypeId) {
-              try {
-                const rt = await db.roomTypes.get(room.roomTypeId)
-                pricePerNight = Number(rt?.basePrice || rt?.base_price) || 0
-              } catch (rtErr) {
-                console.warn('[BookingEngine] Failed to fetch room type price fallback:', rtErr)
-              }
-            }
-            
-            console.log(`[BookingEngine] Resolving price for ${room.roomNumber}: ${pricePerNight} * ${nights} nights`)
-            return pricePerNight * nights
-          })() || 0,
+      totalPrice: finalTotalPrice,
+      total_price: finalTotalPrice,
       numGuests: bookingData.numGuests ?? 1,
       paymentMethod: bookingData.paymentMethod || bookingData.payment_method,
-      specialRequests: specialRequests
+      specialRequests
     }
 
-    console.log('[BookingEngine] Creating booking with payload:', JSON.stringify(bookingPayload, null, 2))
+    console.log('[BookingEngine] Creating booking with AGGRESSIVE payload:', JSON.stringify(bookingPayload, null, 2))
 
     try {
       const created = await db.bookings.create(bookingPayload)
@@ -1193,6 +1196,10 @@ class BookingEngine {
       db.rooms.list(),
       db.guests.list(),
     ])
+
+    if (bookings.length > 0) {
+      console.log('[BookingEngine] RAW BOOKING SAMPLE:', JSON.stringify(bookings[0], null, 2))
+    }
 
     const roomMap = new Map(rooms.map((r: any) => [r.id, r]))
     const guestMap = new Map(guests.map((g: any) => [g.id, g]))
