@@ -22,8 +22,8 @@ export interface LocalBooking {
     checkOut: string
   }
   numGuests: number
-  amount: number
-  totalPrice?: number
+  amount?: number
+  totalPrice: number
   status: 'reserved' | 'confirmed' | 'cancelled' | 'checked-in' | 'checked-out'
   source: 'online' | 'reception'
   synced: boolean
@@ -451,7 +451,6 @@ class BookingEngine {
             console.log(`[BookingEngine] Resolving price for ${room.roomNumber}: ${pricePerNight} * ${nights} nights`)
             return pricePerNight * nights
           })() || 0,
-      amount: Number(bookingData.amount || bookingData.totalPrice || 0), // Include legacy amount for compatibility
       numGuests: bookingData.numGuests ?? 1,
       paymentMethod: bookingData.paymentMethod || bookingData.payment_method,
       specialRequests: specialRequests
@@ -530,7 +529,8 @@ class BookingEngine {
       roomNumber: bookingData.roomNumber,
       dates: bookingData.dates,
       numGuests: bookingData.numGuests,
-      amount: bookingData.amount,
+      amount: bookingData.amount || bookingData.totalPrice,
+      totalPrice: Number(bookingData.totalPrice || bookingData.amount || 0),
       status: bookingData.status,
       source: bookingData.source,
       payment: bookingData.payment,
@@ -1293,6 +1293,7 @@ class BookingEngine {
         },
         numGuests: b.numGuests || 1,
         amount: effectiveAmount,
+        totalPrice: totalPrice,
         discountAmount: discountAmt,
         status: b.status || 'confirmed',
         source: b.source || 'online',

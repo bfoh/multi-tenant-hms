@@ -357,7 +357,7 @@ export function OnsiteBookingPage() {
             checkOut: format(item.checkOut, "yyyy-MM-dd'T'HH:mm:ss")
           },
           numGuests: item.numGuests,
-          amount: itemTotal,
+          totalPrice: itemTotal,
           status: 'confirmed' as const,
           source: 'reception' as const,
           payment: {
@@ -402,7 +402,7 @@ export function OnsiteBookingPage() {
               roomType: cart[0].roomTypeName,
               checkIn: format(cart[0].checkIn, 'yyyy-MM-dd'),
               checkOut: format(cart[0].checkOut, 'yyyy-MM-dd'),
-              amount: grandTotal,
+              totalPrice: grandTotal,
               source: 'onsite/walk-in',
               paymentMethod: primaryPaymentMethod,
               paymentSplits: paymentSplitsData,

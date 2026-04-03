@@ -348,7 +348,7 @@ export function BookingsPage() {
           checkOut: formData.checkOut
         },
         numGuests: formData.adults + formData.children,
-        amount: calculatedTotalPrice,
+        totalPrice: calculatedTotalPrice,
         status: 'confirmed',
         source: 'reception',
         notes: formData.notes,
@@ -404,7 +404,7 @@ export function BookingsPage() {
             roomNumber: selectedProperty.roomNumber,
             checkIn: formData.checkIn,
             checkOut: formData.checkOut,
-            amount: calculatedTotalPrice,
+            totalPrice: calculatedTotalPrice,
             source: 'reception',
             paymentMethod: bookingPayload.paymentMethod,
             createdAt: new Date().toISOString()
