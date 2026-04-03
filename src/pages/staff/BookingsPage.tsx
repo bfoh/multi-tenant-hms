@@ -214,19 +214,30 @@ export function BookingsPage() {
           roomTypeName = b.roomType || ''
         }
 
+        // Price recovery safety net - if persisted price is 0, recalculate from room data
+        let totalPrice = Number(b.totalPrice || b.amount || 0)
+        if (totalPrice === 0 && nights > 0) {
+          const room = enrichedRooms.find(r => r.roomNumber === b.roomNumber)
+          const pricePerNight = room?._resolvedPrice || 0
+          if (pricePerNight > 0) {
+            totalPrice = nights * pricePerNight
+            console.log(`[BookingsPage] Price Recovery triggered for ${b.guest?.fullName || 'Guest'}: ${nights} nights * ${pricePerNight} = ${totalPrice}`)
+          }
+        }
+
         return {
           id: b._id,
           remoteId: b.remoteId || b._id,
-          guestName: b.guest.fullName,
-          guestEmail: b.guest.email,
-          guestPhone: b.guest.phone,
+          guestName: b.guest?.fullName || 'Guest',
+          guestEmail: b.guest?.email || '',
+          guestPhone: b.guest?.phone || '',
           roomNumber: b.roomNumber,
           roomTypeName,
           checkIn: b.dates.checkIn,
           checkOut: b.dates.checkOut,
           status: b.status,
           source: b.source,
-          totalPrice: Number(b.amount || b.totalPrice || 0),
+          totalPrice,
           numGuests: b.numGuests,
           nights,
           paymentMethod: b.payment_method || b.paymentMethod || 'Not paid',

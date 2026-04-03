@@ -1271,7 +1271,7 @@ class BookingEngine {
       }
 
       const discountAmt = Number(b.discountAmount || b.discount_amount || 0)
-      const totalPrice = Number(b.totalPrice || b.total_price || 0)
+      const totalPrice = Number(b.totalPrice || b.total_price || b.amount || 0)
       const effectiveAmount = (b.finalAmount != null || b.final_amount != null)
         ? Number(b.finalAmount ?? b.final_amount ?? 0)
         : Math.max(0, totalPrice - discountAmt)
