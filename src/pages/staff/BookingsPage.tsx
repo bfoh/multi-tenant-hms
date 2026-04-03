@@ -123,8 +123,9 @@ export function BookingsPage() {
     if (!selectedProperty) return
 
     const nights = calculateNights(formData.checkIn, formData.checkOut)
-    const selectedRoomType = roomTypes.find((rt: any) => rt.id === (selectedProperty.propertyTypeId || selectedProperty.roomTypeId))
-    const pricePerNight = Number(selectedRoomType?.basePrice) || Number(selectedProperty.basePrice) || 0
+    const selectedRoomType = roomTypes.find((rt: any) => rt.id === (selectedProperty.roomTypeId || selectedProperty.propertyTypeId))
+    const pricePerNight = Number(selectedRoomType?.basePrice) || Number(selectedProperty.price) || Number(selectedProperty.basePrice) || 0
+    console.log('[BookingsPage] Price calc - roomTypeId:', selectedProperty.roomTypeId, 'roomType:', selectedRoomType?.name, 'basePrice:', selectedRoomType?.basePrice, 'fallback price:', selectedProperty.price, 'pricePerNight:', pricePerNight)
     const calculatedPrice = nights * pricePerNight
 
     setFormData(prev => {
@@ -266,10 +267,10 @@ export function BookingsPage() {
         return
       }
 
-      // Get room type name from propertyTypeId
-      const selectedRoomType = roomTypes.find((rt: any) => rt.id === (selectedProperty.propertyTypeId || selectedProperty.roomTypeId))
+      // Get room type name from roomTypeId
+      const selectedRoomType = roomTypes.find((rt: any) => rt.id === (selectedProperty.roomTypeId || selectedProperty.propertyTypeId))
       const roomTypeName = selectedRoomType?.name || ''
-      console.log('[BookingsPage] Room type:', roomTypeName, 'from propertyTypeId:', selectedProperty.propertyTypeId)
+      console.log('[BookingsPage] Room type:', roomTypeName, 'roomTypeId:', selectedProperty.roomTypeId, 'totalPrice:', formData.totalPrice)
 
       const primaryPaymentMethod = formData.paymentType === 'later'
         ? 'Not paid'
