@@ -20,6 +20,7 @@ import {
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
 import { blink } from '@/blink/client'
+import { supabase } from '@/lib/supabase'
 import { toast } from 'sonner'
 import { activityLogService } from '@/services/activity-log-service'
 import { format } from 'date-fns'
@@ -53,38 +54,55 @@ export default function HousekeepingPage() {
     try {
       setLoading(true)
 
-      // Load staff and rooms first (these should always exist)
-      const [staffData, roomsData] = await Promise.all([
-        blink.db.staff.list().catch((e) => {
-          console.warn('Failed to load staff:', e)
-          return []
-        }),
-        blink.db.rooms.list().catch((e) => {
-          console.warn('Failed to load rooms:', e)
-          return []
-        })
+      const [tasksResult, staffResult, roomsResult] = await Promise.all([
+        supabase
+          .from('housekeeping_tasks')
+          .select('*')
+          .order('created_at', { ascending: false }),
+        supabase.from('staff').select('*'),
+        supabase.from('rooms').select('*')
       ])
 
-      setStaff(staffData as unknown as Staff[])
-      setRooms(roomsData as unknown as Room[])
+      if (tasksResult.error) console.error('❌ [HousekeepingPage] tasks error:', tasksResult.error)
+      if (staffResult.error) console.error('❌ [HousekeepingPage] staff error:', staffResult.error)
+      if (roomsResult.error) console.error('❌ [HousekeepingPage] rooms error:', roomsResult.error)
 
-      // Try to load housekeeping tasks (table may not exist)
-      try {
-        console.log('🧹 [HousekeepingPage] Loading housekeeping tasks...')
-        const tasksData = await blink.db.housekeepingTasks.list({ orderBy: { createdAt: 'desc' } })
-        console.log('✅ [HousekeepingPage] Loaded tasks:', tasksData.length)
-        setTasks(tasksData as unknown as HousekeepingTask[])
-      } catch (taskError) {
-        console.error('❌ [HousekeepingPage] Failed to load housekeeping tasks:', taskError)
-        console.error('ℹ️ [HousekeepingPage] The housekeeping_tasks table may not exist in Supabase. Please create it.')
-        setTasks([])
+      // Convert snake_case to camelCase
+      const tasks = (tasksResult.data || []).map((t: any) => ({
+        id: t.id,
+        roomId: t.room_id,
+        roomNumber: t.room_number,
+        taskType: t.task_type,
+        status: t.status,
+        assignedTo: t.assigned_to,
+        notes: t.notes,
+        priority: t.priority,
+        createdAt: t.created_at,
+        updatedAt: t.updated_at,
+        completedAt: t.completed_at || null,
+      }))
 
-        // Show a helpful message to the user
-        toast.error('Housekeeping tasks table not found. Please create it in Supabase.', {
-          duration: 10000,
-          description: 'See console for SQL instructions.'
-        })
-      }
+      const staffList = (staffResult.data || []).map((s: any) => ({
+        id: s.id,
+        name: s.name,
+        email: s.email,
+        phone: s.phone,
+        role: s.role,
+        userId: s.user_id,
+      }))
+
+      const roomsList = (roomsResult.data || []).map((r: any) => ({
+        id: r.id,
+        roomNumber: r.room_number,
+        roomTypeId: r.room_type_id,
+        status: r.status,
+        price: r.price,
+      }))
+
+      console.log('✅ [HousekeepingPage] Loaded:', tasks.length, 'tasks,', staffList.length, 'staff')
+      setTasks(tasks as unknown as HousekeepingTask[])
+      setStaff(staffList as unknown as Staff[])
+      setRooms(roomsList as unknown as Room[])
     } catch (error) {
       console.error('Failed to load housekeeping data:', error)
       toast.error('Failed to load housekeeping data')
@@ -144,10 +162,10 @@ export default function HousekeepingPage() {
   const handleAssignTask = async (taskId: string, staffId: string) => {
     try {
       // Update task assignment
-      await blink.db.housekeepingTasks.update(taskId, {
-        assignedTo: staffId,
-        status: 'in_progress'
-      })
+      await supabase
+        .from('housekeeping_tasks')
+        .update({ assigned_to: staffId, status: 'in_progress', updated_at: new Date().toISOString() })
+        .eq('id', taskId)
 
       // Get task and staff details for email
       const task = tasks.find(t => t.id === taskId)
@@ -215,7 +233,7 @@ export default function HousekeepingPage() {
     const task = tasks.find(t => t.id === deleteId)
 
     try {
-      await blink.db.housekeepingTasks.delete(deleteId)
+      await supabase.from('housekeeping_tasks').delete().eq('id', deleteId)
 
       // Log the task deletion
       if (task) {

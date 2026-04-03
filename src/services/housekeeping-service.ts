@@ -1,11 +1,10 @@
-import { blink } from '@/blink/client'
+import { supabase } from '@/lib/supabase'
 import type { Booking, Room, HousekeepingTask } from '@/types'
 import { activityLogService } from '@/services/activity-log-service'
 
 class HousekeepingService {
     /**
      * Creates a housekeeping task for a room after checkout.
-     * Also handles logging the activity.
      */
     async createCheckoutTask(
         booking: Booking,
@@ -13,36 +12,41 @@ class HousekeepingService {
         guestName: string,
         currentUser: { id: string } | null
     ): Promise<HousekeepingTask | null> {
-        const taskId = `task_${Date.now()}_${Math.random().toString(36).substring(7)}`
-
         const taskPayload = {
-            // Use null for userId if not available, to avoid empty string VIOLATING foreign key constraints
-            userId: currentUser?.id || booking.userId || null,
-            propertyId: room.id,
-            roomNumber: room.roomNumber,
+            room_id: room.id || null,
+            room_number: room.roomNumber,
+            task_type: 'clean',
             status: 'pending',
             notes: `Checkout cleaning for ${guestName}`,
-            createdAt: new Date().toISOString(),
-            assignedTo: null // Explicitly null for new tasks
+            priority: 'normal',
+            assigned_to: null,
         }
 
         console.log('🧹 [HousekeepingService] Creating task with payload:', taskPayload)
 
         try {
-            // Create the task in database
-            const newTask = await blink.db.housekeepingTasks.create(taskPayload)
-            console.log('✅ [HousekeepingService] Task created successfully:', taskId)
+            const { data, error } = await supabase
+                .from('housekeeping_tasks')
+                .insert(taskPayload)
+                .select()
+                .single()
 
-            // Log the creation
+            if (error) {
+                console.error('❌ [HousekeepingService] Failed to create task:', error)
+                return null
+            }
+
+            console.log('✅ [HousekeepingService] Task created successfully:', data.id)
+
             try {
                 await activityLogService.log({
                     action: 'created',
                     entityType: 'task',
-                    entityId: taskId,
+                    entityId: data.id,
                     details: {
                         title: 'Checkout Cleaning',
                         roomNumber: room.roomNumber,
-                        guestName: guestName,
+                        guestName,
                         status: 'pending',
                         reason: 'guest_check_out',
                         bookingId: booking.id
@@ -53,10 +57,22 @@ class HousekeepingService {
                 console.error('[HousekeepingService] Failed to log task creation:', logError)
             }
 
-            return newTask
+            // Convert snake_case response to camelCase for the UI
+            return {
+                id: data.id,
+                roomId: data.room_id,
+                roomNumber: data.room_number,
+                taskType: data.task_type,
+                status: data.status,
+                assignedTo: data.assigned_to,
+                notes: data.notes,
+                priority: data.priority,
+                createdAt: data.created_at,
+                updatedAt: data.updated_at,
+                completedAt: data.completed_at || null,
+            } as any
         } catch (error: any) {
-            console.error('❌ [HousekeepingService] Failed to create task:', error)
-            console.error('❌ [HousekeepingService] Error details:', error?.message || error)
+            console.error('❌ [HousekeepingService] Failed to create task:', error?.message || error)
             return null
         }
     }
@@ -73,38 +89,31 @@ class HousekeepingService {
         try {
             console.log(`🧹 [HousekeepingService] Completing task ${taskId} for room ${roomNumber}`)
 
-            // 1. Update task
-            await blink.db.housekeepingTasks.update(taskId, {
-                status: 'completed',
-                completedAt: new Date().toISOString(),
-                notes: notes
-            })
+            // 1. Update task status
+            const { error: taskError } = await supabase
+                .from('housekeeping_tasks')
+                .update({
+                    status: 'completed',
+                    notes: notes || null,
+                    updated_at: new Date().toISOString()
+                })
+                .eq('id', taskId)
 
-            // 2. Find room and update status
-            // We list by roomNumber to be safe, as task might store roomNumber string
-            const rooms = await blink.db.rooms.list({ where: { roomNumber }, limit: 1 })
-            const room = rooms[0]
+            if (taskError) {
+                console.error('[HousekeepingService] Failed to update task:', taskError)
+                return { success: false, error: taskError.message }
+            }
 
-            if (room) {
-                if (room.status?.toLowerCase() === 'cleaning') {
-                    console.log(`[HousekeepingService] Updating room ${room.roomNumber} status to available`)
-                    await blink.db.rooms.update(room.id, { status: 'available' })
+            // 2. Update room status to available
+            const { error: roomError } = await supabase
+                .from('rooms')
+                .update({ status: 'available', updated_at: new Date().toISOString() })
+                .eq('room_number', roomNumber)
+                .eq('status', 'cleaning')
 
-                    // Update property status if it matches
-                    try {
-                        // Note: properties endpoint might need specific handling if it's different from rooms table
-                        // Ideally properties and rooms are synced or same table structure wrapper
-                        const properties = await (blink.db as any).properties.list({ limit: 500 })
-                        const property = properties.find((p: any) => p.id === room.id || p.roomNumber === room.roomNumber)
-                        if (property && property.status !== 'active') {
-                            await (blink.db as any).properties.update(property.id, { status: 'active' })
-                        }
-                    } catch (e) {
-                        console.warn('[HousekeepingService] Failed to sync property status:', e)
-                    }
-                }
-            } else {
-                console.warn(`[HousekeepingService] Room not found for number: ${roomNumber}`)
+            if (roomError) {
+                console.warn('[HousekeepingService] Failed to update room status:', roomError)
+                // Non-fatal — task is still completed
             }
 
             return { success: true }
