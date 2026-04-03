@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { blink } from '@/blink/client'
+import { supabase } from '@/lib/supabase'
 import { toast } from 'sonner'
 import { activityLogService } from '@/services/activity-log-service'
 import { Booking, Room, Guest, PaymentSplit } from '@/types'
@@ -21,123 +21,74 @@ export function useCheckIn() {
 
     const checkIn = async ({ booking, room, guest, paymentMethod, paymentSplits, discountAmount, discountReason, user }: CheckInOptions) => {
         setIsProcessing(true)
-        const db = (blink.db as any)
 
         try {
             // 1. Validation
             if (room && room.status !== 'available' && booking.status !== 'checked-in') {
-                if (room.status === 'occupied') {
-                    throw new Error(`Cannot check in: Room ${room.roomNumber} is currently occupied. Check out the previous guest first.`)
-                }
-                if (room.status === 'cleaning') {
-                    throw new Error(`Cannot check in: Room ${room.roomNumber} is currently being cleaned. Please complete housekeeping first.`)
-                }
-                if (room.status === 'maintenance') {
-                    throw new Error(`Cannot check in: Room ${room.roomNumber} is under maintenance.`)
-                }
+                if (room.status === 'occupied') throw new Error(`Cannot check in: Room ${room.roomNumber} is currently occupied.`)
+                if (room.status === 'cleaning') throw new Error(`Cannot check in: Room ${room.roomNumber} is currently being cleaned.`)
+                if (room.status === 'maintenance') throw new Error(`Cannot check in: Room ${room.roomNumber} is under maintenance.`)
             }
 
-            // Extract and normalize booking ID - Calendar views use various ID formats
-            let bookingId = booking.remoteId || booking.id || booking._id
-
-            console.log('[useCheckIn] Raw booking object keys:', Object.keys(booking))
-            console.log('[useCheckIn] Raw IDs - remoteId:', booking.remoteId, 'id:', booking.id, '_id:', booking._id)
-
-            // Strip 'booking_' or 'booking-' prefix if present
-            if (typeof bookingId === 'string') {
-                if (bookingId.startsWith('booking_')) {
-                    bookingId = bookingId.replace('booking_', '')
-                } else if (bookingId.startsWith('booking-')) {
-                    bookingId = bookingId.replace('booking-', '')
-                }
-            }
-
+            const bookingId = booking.id || booking.remoteId || booking._id
             const roomId = room?.id
-            const guestId = guest?.id
 
-            console.log('[useCheckIn] Starting check-in process:', { bookingId, roomId, guestContent: guest })
+            console.log('[useCheckIn] Starting check-in:', { bookingId, roomId })
 
-            // 2. Find the booking in the database first (handles ID format variations)
-            let actualBooking = await db.bookings.get(bookingId).catch(() => null)
+            // 2. Fetch actual booking from DB
+            const { data: actualBooking } = await supabase
+                .from('bookings')
+                .select('*')
+                .eq('id', bookingId)
+                .single()
 
-            console.log('[useCheckIn] Direct lookup result:', actualBooking ? 'Found' : 'Not found')
+            if (!actualBooking) throw new Error(`Booking not found: ${bookingId}`)
 
-            // If not found, try with different ID formats
-            if (!actualBooking) {
-                console.log('[useCheckIn] Booking not found with ID:', bookingId, '- searching all bookings...')
-                const allBookings = await db.bookings.list({ limit: 500 })
-                console.log('[useCheckIn] Total bookings in database:', allBookings.length)
-                console.log('[useCheckIn] First few booking IDs:', allBookings.slice(0, 5).map((b: any) => b.id))
+            // 3. Calculate final amount
+            const totalPrice = Number(actualBooking.total_price) || booking.totalPrice || booking.amount || 0
+            const finalAmount = discountAmount && discountAmount > 0 ? Math.max(0, totalPrice - discountAmount) : totalPrice
 
-                actualBooking = allBookings.find((b: any) =>
-                    b.id === bookingId ||
-                    b.id === `booking-${bookingId}` ||
-                    b.id === `booking_${bookingId}` ||
-                    b.id?.replace(/^booking[-_]/, '') === bookingId
-                )
-
-                if (actualBooking) {
-                    bookingId = actualBooking.id
-                    console.log('[useCheckIn] Found booking with actual ID:', bookingId)
-                } else {
-                    console.error('[useCheckIn] Could not find booking. Searched for:', bookingId)
-                    throw new Error(`Booking not found: ${booking.remoteId || booking.id}`)
-                }
-            } else {
-                // If booking was found directly, ensure we have the correct ID
-                bookingId = actualBooking.id || bookingId
-                console.log('[useCheckIn] Using resolved booking ID:', bookingId)
+            // 4. Build update payload (all snake_case for Supabase)
+            const updateData: any = {
+                status: 'checked-in',
+                actual_check_in: new Date().toISOString(),
+                payment_method: paymentMethod,
+                updated_at: new Date().toISOString()
             }
 
-            // 3. Calculate final amount if discount is applied
-            const totalPrice = actualBooking?.totalPrice || booking.totalPrice || booking.amount || 0
-            const finalAmount = discountAmount && discountAmount > 0
-                ? Math.max(0, totalPrice - discountAmount)
-                : totalPrice
+            if (paymentSplits && paymentSplits.length > 1) {
+                const existingReq = actualBooking.special_requests || ''
+                const cleanedReq = existingReq.replace(/\s*<!-- PAYMENT_SPLITS:.*? -->/g, '')
+                updateData.special_requests = cleanedReq + `\n\n<!-- PAYMENT_SPLITS:${JSON.stringify(paymentSplits)} -->`
+            }
 
-            // 4. Update Booking with the resolved ID
-            console.log('[useCheckIn] Attempting to update booking:', bookingId, 'with discount:', discountAmount)
-            try {
-                const updateData: any = {
-                    status: 'checked-in',
-                    actualCheckIn: new Date().toISOString(),
-                    paymentMethod: paymentMethod
-                }
+            if (discountAmount && discountAmount > 0) {
+                updateData.discount_amount = discountAmount
+                updateData.final_amount = finalAmount
+            }
 
-                // Store split payment data in specialRequests (no DB column needed)
-                if (paymentSplits && paymentSplits.length > 1) {
-                    const existingReq = actualBooking?.special_requests || actualBooking?.specialRequests || ''
-                    const cleanedReq = existingReq.replace(/\s*<!-- PAYMENT_SPLITS:.*? -->/g, '')
-                    updateData.specialRequests = cleanedReq + `\n\n<!-- PAYMENT_SPLITS:${JSON.stringify(paymentSplits)} -->`
-                }
+            const { error: bookingUpdateError } = await supabase
+                .from('bookings')
+                .update(updateData)
+                .eq('id', bookingId)
 
-                // Add discount fields if discount is applied
-                if (discountAmount && discountAmount > 0) {
-                    updateData.discountAmount = discountAmount
-                    updateData.finalAmount = finalAmount
-                    if (discountReason) {
-                        updateData.discountReason = discountReason
-                    }
-                    if (user?.id) {
-                        updateData.discountedBy = user.id
-                    }
-                }
-
-                await db.bookings.update(bookingId, updateData)
-                console.log('[useCheckIn] Booking updated successfully with discount:', discountAmount || 0)
-            } catch (bookingUpdateError) {
+            if (bookingUpdateError) {
                 console.error('[useCheckIn] Booking update failed:', bookingUpdateError)
-                throw bookingUpdateError
+                throw new Error(bookingUpdateError.message)
             }
+            console.log('[useCheckIn] Booking updated successfully')
 
-            // 4. Update Room (with error handling - don't fail entire check-in if room update fails)
+            // 5. Update room status
             if (roomId) {
-                console.log('[useCheckIn] Attempting to update room:', roomId)
-                try {
-                    await db.rooms.update(roomId, { status: 'occupied' })
-                    console.log('[useCheckIn] Room updated successfully')
+                const { error: roomError } = await supabase
+                    .from('rooms')
+                    .update({ status: 'occupied', updated_at: new Date().toISOString() })
+                    .eq('id', roomId)
 
-                    // Log room status change
+                if (roomError) {
+                    console.warn('[useCheckIn] Room update failed (continuing anyway):', roomError)
+                } else {
+                    console.log('[useCheckIn] Room updated to occupied')
                     await activityLogService.log({
                         action: 'updated',
                         entityType: 'room',
@@ -148,22 +99,10 @@ export function useCheckIn() {
                             newStatus: 'occupied',
                             reason: 'guest_check_in',
                             guestName: guest.name || 'Unknown Guest',
-                            bookingId: bookingId
+                            bookingId
                         },
                         userId: user?.id || 'system'
                     }).catch(logError => console.error('[useCheckIn] Failed to log room status change:', logError))
-
-                    // Update property status if consistent
-                    try {
-                        const props = await db.properties.list({ limit: 1, where: { id: roomId } })
-                        if (props.length > 0) {
-                            await db.properties.update(roomId, { status: 'occupied' })
-                        }
-                    } catch (e) {
-                        console.warn('[useCheckIn] Property status update skipped/failed', e)
-                    }
-                } catch (roomUpdateError) {
-                    console.warn('[useCheckIn] Room update failed (continuing anyway):', roomUpdateError)
                 }
             }
 

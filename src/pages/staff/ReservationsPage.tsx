@@ -599,20 +599,59 @@ export function ReservationsPage() {
     try {
       let housekeepingTaskCreated = false
 
-      // Update booking status to checked-out
-      await db.bookings.update(booking.id, {
-        status: 'checked-out',
-        actualCheckOut: new Date().toISOString()
-      })
+      // Update booking status to checked-out via direct Supabase
+      await supabase
+        .from('bookings')
+        .update({ status: 'checked-out', actual_check_out: new Date().toISOString(), updated_at: new Date().toISOString() })
+        .eq('id', booking.id)
 
-      // Update room status to cleaning
-      const room = roomMap.get(booking.roomId)
+      // Resolve room: try roomMap first, then fall back to querying by room_number from special_requests
+      let room = roomMap.get(booking.roomId)
+
+      // If room_id was null on the booking, find room by room_number stored in the booking's joined data
+      if (!room) {
+        // Try to find room number from snapshot in special_requests or from the loaded rooms list
+        const guestSnapshot = (() => {
+          try {
+            const m = ((booking as any).specialRequests || '').match(/<!-- GUEST_SNAPSHOT:(.*?) -->/)
+            return m ? JSON.parse(m[1]) : null
+          } catch { return null }
+        })()
+        // Search rooms by looking for the booking's room in our loaded rooms list
+        const bookingRoomNumber = (booking as any).roomNumber || guestSnapshot?.roomNumber
+        if (bookingRoomNumber) {
+          room = rooms.find(r => r.roomNumber === bookingRoomNumber) as any
+        }
+        // Last resort: query DB directly
+        if (!room) {
+          const { data: roomRows } = await supabase
+            .from('rooms')
+            .select('*')
+            .limit(500)
+          if (roomRows) {
+            // We need to find which room this booking was for — use booking's room_id or joined data
+            const { data: bData } = await supabase
+              .from('bookings')
+              .select('room_id, rooms(id, room_number, room_type_id, status)')
+              .eq('id', booking.id)
+              .single()
+            if (bData?.rooms) {
+              const r = bData.rooms as any
+              room = { id: r.id, roomNumber: r.room_number, roomTypeId: r.room_type_id, status: r.status } as any
+            }
+          }
+        }
+      }
+
       if (room) {
-        await db.rooms.update(room.id, { status: 'cleaning' })
-        // Optimistically reflect in UI immediately
-        setRooms(prev => prev.map(r => (r.id === room.id ? { ...r, status: 'cleaning' } : r)))
+        // Update room status to cleaning
+        await supabase
+          .from('rooms')
+          .update({ status: 'cleaning', updated_at: new Date().toISOString() })
+          .eq('id', room.id)
 
-        // Log room status change
+        setRooms(prev => prev.map(r => (r.id === room!.id ? { ...r, status: 'cleaning' } : r)))
+
         try {
           await activityLogService.log({
             action: 'updated',
@@ -632,28 +671,39 @@ export function ReservationsPage() {
           console.error('Failed to log room status change:', logError)
         }
 
-        // Update properties table if a matching property exists (best-effort)
+        // Create housekeeping task directly via Supabase (most reliable)
         try {
-          const props = await db.properties.list({ limit: 500 })
-          const prop = props.find((p: any) => p.id === room.id)
-          if (prop) {
-            await db.properties.update(prop.id, { status: 'cleaning' })
-          }
-        } catch (e) {
-          console.warn('Properties update skipped:', e)
-        }
+          const guestName = guestMap.get(booking.guestId)?.name ||
+            (() => { try { const m = ((booking as any).specialRequests || '').match(/<!-- GUEST_SNAPSHOT:(.*?) -->/); return m ? JSON.parse(m[1]).name : 'Guest' } catch { return 'Guest' } })()
 
-        // Create housekeeping task using the new service
-        try {
-          const guestName = guestMap.get(booking.guestId)?.name || 'Guest'
-          const newTask = await housekeepingService.createCheckoutTask(booking, room, guestName, user)
+          // Get tenant_id from the room (required by RLS WITH CHECK policy)
+          const tenantId = (room as any).tenantId || (room as any).tenant_id || null
 
-          if (newTask) {
+          const { data: newTask, error: taskError } = await supabase
+            .from('housekeeping_tasks')
+            .insert({
+              room_id: room.id,
+              room_number: room.roomNumber,
+              task_type: 'clean',
+              status: 'pending',
+              notes: `Checkout cleaning for ${guestName}`,
+              priority: 'normal',
+              tenant_id: tenantId,
+            })
+            .select()
+            .single()
+
+          if (taskError) {
+            console.error('❌ [Checkout] housekeeping_tasks insert error:', taskError)
+          } else {
             housekeepingTaskCreated = true
+            console.log('✅ [Checkout] Housekeeping task created:', newTask?.id)
           }
         } catch (taskError) {
-          console.error('❌ [Checkout] Failed to create housekeeping task via service:', taskError)
+          console.error('❌ [Checkout] Failed to create housekeeping task:', taskError)
         }
+      } else {
+        console.warn('[Checkout] Could not resolve room for booking', booking.id, '— skipping housekeeping task')
       }
 
       // Optimistic UI update

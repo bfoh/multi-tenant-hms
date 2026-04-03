@@ -12,7 +12,7 @@ class HousekeepingService {
         guestName: string,
         currentUser: { id: string } | null
     ): Promise<HousekeepingTask | null> {
-        const taskPayload = {
+        const taskPayload: any = {
             room_id: room.id || null,
             room_number: room.roomNumber,
             task_type: 'clean',
@@ -20,6 +20,7 @@ class HousekeepingService {
             notes: `Checkout cleaning for ${guestName}`,
             priority: 'normal',
             assigned_to: null,
+            tenant_id: (room as any).tenantId || (room as any).tenant_id || null,
         }
 
         console.log('🧹 [HousekeepingService] Creating task with payload:', taskPayload)
