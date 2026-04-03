@@ -19,6 +19,7 @@ import { Plus, Calendar, User, Home, Search, Trash2, Users, QrCode, ExternalLink
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { QRCodeSVG } from 'qrcode.react'
 import { blink } from '../../blink/client'
+import { supabase } from '../../lib/supabase'
 import { toast } from 'sonner'
 import { Badge } from '../../components/ui/badge'
 import { useStaffRole } from '../../hooks/use-staff-role'
@@ -124,8 +125,8 @@ export function BookingsPage() {
 
     const nights = calculateNights(formData.checkIn, formData.checkOut)
     const selectedRoomType = roomTypes.find((rt: any) => rt.id === (selectedProperty.roomTypeId || selectedProperty.propertyTypeId))
-    const pricePerNight = Number(selectedRoomType?.basePrice) || Number(selectedProperty.price) || Number(selectedProperty.basePrice) || 0
-    console.log('[BookingsPage] Price calc - roomTypeId:', selectedProperty.roomTypeId, 'roomType:', selectedRoomType?.name, 'basePrice:', selectedRoomType?.basePrice, 'fallback price:', selectedProperty.price, 'pricePerNight:', pricePerNight)
+    const pricePerNight = Number(selectedRoomType?.basePrice || selectedRoomType?.base_price) || Number(selectedProperty._resolvedPrice) || Number(selectedProperty.price) || Number(selectedProperty.basePrice) || 0
+    console.log('[BookingsPage] Price calc - roomTypeId:', selectedProperty.roomTypeId, 'roomType:', selectedRoomType?.name, 'basePrice:', selectedRoomType?.basePrice, '_resolvedPrice:', selectedProperty._resolvedPrice, 'price:', selectedProperty.price, 'pricePerNight:', pricePerNight)
     const calculatedPrice = nights * pricePerNight
 
     setFormData(prev => {
@@ -143,16 +144,53 @@ export function BookingsPage() {
 
   const loadData = async () => {
     try {
-      // Load bookings, properties (rooms), and room types
-      const [allBookings, roomsData, roomTypesData] = await Promise.all([
+      // Load bookings and rooms (with room_types joined in one query to guarantee price is available)
+      const [allBookings, roomsResult] = await Promise.all([
         bookingEngine.getAllBookings(),
-        (blink.db as any).rooms.list({ orderBy: { roomNumber: 'asc' } }),
-        (blink.db as any).roomTypes.list()
+        supabase
+          .from('rooms')
+          .select('*, room_types(id, name, base_price)')
+          .order('room_number', { ascending: true })
       ])
 
-      const roomTypeMap = new Map<string, string>((roomTypesData as any[]).map((rt: any) => [rt.id, rt.name]))
+      if (roomsResult.error) {
+        console.error('[BookingsPage] rooms query error:', roomsResult.error)
+        throw roomsResult.error
+      }
+
+      const rawRooms = roomsResult.data || []
+      console.log('[BookingsPage] rawRooms count:', rawRooms.length, 'sample:', JSON.stringify(rawRooms.slice(0, 1)))
+
+      // Convert snake_case and embed resolved price directly from joined room_type
+      const enrichedRooms = rawRooms.map((room: any) => {
+        const rt = Array.isArray(room.room_types) ? room.room_types[0] : (room.room_types || {})
+        const roomTypeName = rt.name || room.room_type || room.propertyType || ''
+        
+        return {
+          id: room.id,
+          roomNumber: room.room_number,
+          roomTypeId: room.room_type_id,
+          roomTypeName: roomTypeName,
+          floor: room.floor,
+          status: room.status,
+          price: room.price,
+          tenantId: room.tenant_id,
+          _resolvedPrice: Number(rt.base_price || rt.basePrice) || Number(room.price) || 0,
+          _roomTypeName: rt.name || roomTypeName,
+        }
+      })
+
+      console.log('[BookingsPage] enrichedRooms sample:', JSON.stringify(enrichedRooms.slice(0, 2)))
+
+      // Build room type map from joined data (for booking list display)
+      const roomTypeMap = new Map<string, string>(
+        enrichedRooms.map((r: any) => [r.roomTypeId, r._roomTypeName]).filter(([k]: any) => k)
+      )
+      const roomTypesData = Array.from(
+        new Map(enrichedRooms.filter((r: any) => r.roomTypeId).map((r: any) => [r.roomTypeId, { id: r.roomTypeId, name: r._roomTypeName, basePrice: r._resolvedPrice }])).values()
+      )
       const propertyTypeByRoomNumber = new Map<string, string>(
-        (roomsData as any[]).map((p: any) => [p.roomNumber, p.roomTypeId])
+        enrichedRooms.map((r: any) => [r.roomNumber, r.roomTypeId])
       )
 
       // Transform to UI format and deduplicate
@@ -209,7 +247,7 @@ export function BookingsPage() {
       }, [])
 
       setBookings(uniqueBookings)
-      setProperties(roomsData as any[])
+      setProperties(enrichedRooms)
       setRoomTypes(roomTypesData as any[])
     } catch (error) {
       console.error('Failed to load data:', error)
@@ -269,8 +307,14 @@ export function BookingsPage() {
 
       // Get room type name from roomTypeId
       const selectedRoomType = roomTypes.find((rt: any) => rt.id === (selectedProperty.roomTypeId || selectedProperty.propertyTypeId))
-      const roomTypeName = selectedRoomType?.name || ''
-      console.log('[BookingsPage] Room type:', roomTypeName, 'roomTypeId:', selectedProperty.roomTypeId, 'totalPrice:', formData.totalPrice)
+      const roomTypeName = selectedRoomType?.name || selectedProperty.roomTypeName || ''
+
+      // Recalculate price here at submit time — never trust formData.totalPrice (stale closure risk)
+      const nights = calculateNights(formData.checkIn, formData.checkOut)
+      const pricePerNight = Number(selectedRoomType?.basePrice) || Number(selectedProperty._resolvedPrice) || Number(selectedProperty.price) || 0
+      const calculatedTotalPrice = nights * pricePerNight
+      console.log('[BookingsPage] handleSubmit price recalc - roomTypeId:', selectedProperty.roomTypeId, 'roomType:', selectedRoomType?.name, 'basePrice:', selectedRoomType?.basePrice, '_resolvedPrice:', selectedProperty._resolvedPrice, 'nights:', nights, 'pricePerNight:', pricePerNight, 'total:', calculatedTotalPrice)
+      console.log('[BookingsPage] Room type:', roomTypeName, 'roomTypeId:', selectedProperty.roomTypeId, 'totalPrice from state:', formData.totalPrice, 'recalculated:', calculatedTotalPrice)
 
       const primaryPaymentMethod = formData.paymentType === 'later'
         ? 'Not paid'
@@ -296,12 +340,12 @@ export function BookingsPage() {
           checkOut: formData.checkOut
         },
         numGuests: formData.adults + formData.children,
-        amount: formData.totalPrice,
+        amount: calculatedTotalPrice,
         status: 'confirmed',
         source: 'reception',
         notes: formData.notes,
         payment_method: primaryPaymentMethod,
-        amountPaid: formData.paymentType === 'full' ? formData.totalPrice : formData.paymentType === 'part' ? splitsPaidTotal : 0,
+        amountPaid: formData.paymentType === 'full' ? calculatedTotalPrice : formData.paymentType === 'part' ? splitsPaidTotal : 0,
         paymentStatus: formData.paymentType === 'full' ? 'full' : formData.paymentType === 'part' ? 'part' : 'pending',
         paymentMethod: primaryPaymentMethod,
         paymentSplits: paymentSplitsData,
@@ -352,7 +396,7 @@ export function BookingsPage() {
             roomNumber: selectedProperty.roomNumber,
             checkIn: formData.checkIn,
             checkOut: formData.checkOut,
-            amount: formData.totalPrice,
+            amount: calculatedTotalPrice,
             source: 'reception',
             paymentMethod: bookingPayload.paymentMethod,
             createdAt: new Date().toISOString()
@@ -560,10 +604,10 @@ export function BookingsPage() {
                     <option value="">Select a room</option>
                     {availableProperties.map((property: any) => {
                       const roomType = roomTypes.find((rt: any) => rt.id === (property.propertyTypeId || property.roomTypeId))
-                      const pricePerNight = Number(roomType?.basePrice) || Number(property.basePrice) || 0
+                      const pricePerNight = Number(roomType?.basePrice) || Number(property._resolvedPrice) || Number(property.price) || 0
                       return (
                         <option key={property.id} value={property.id}>
-                          Room {property.roomNumber} • {roomType?.name || 'Room'} • {formatCurrencySync(pricePerNight, currency)}/night
+                          Room {property.roomNumber} • {roomType?.name || property.roomTypeName || 'Room'} • {formatCurrencySync(pricePerNight, currency)}/night
                         </option>
                       )
                     })}
@@ -667,10 +711,11 @@ export function BookingsPage() {
                     {formData.checkIn && formData.checkOut && formData.propertyId && (() => {
                       const selectedProperty = properties.find((p: any) => p.id === formData.propertyId)
                       const roomType = selectedProperty ? roomTypes.find((rt: any) => rt.id === (selectedProperty.propertyTypeId || selectedProperty.roomTypeId)) : null
-                      const pricePerNight = roomType ? Number(roomType.basePrice) : Number(selectedProperty?.basePrice) || 0
+                      const pricePerNight = Number(roomType?.basePrice) || Number(selectedProperty?._resolvedPrice) || Number(selectedProperty?.price) || 0
+                      const nights = calculateNights(formData.checkIn, formData.checkOut)
                       return (
                         <p className="text-xs text-muted-foreground mt-1">
-                          {calculateNights(formData.checkIn, formData.checkOut)} night(s) × {formatCurrencySync(pricePerNight, currency)}/night
+                          {nights} night(s) × {formatCurrencySync(pricePerNight, currency)}/night = {formatCurrencySync(nights * pricePerNight, currency)}
                         </p>
                       )
                     })()}

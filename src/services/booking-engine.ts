@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { activityLogService } from './activity-log-service'
 import { sendBookingConfirmation } from './notifications'
 import { createPreInvoiceData, generateInvoicePDF, blobToBase64 } from './invoice-service'
+import { calculateNights } from '../lib/display'
 
 export interface LocalBooking {
   _id: string
@@ -430,7 +431,25 @@ class BookingEngine {
       checkOut: bookingData.dates.checkOut,
       status: bookingData.status,
       source: bookingData.source,
-      totalPrice: bookingData.amount ?? 0,
+      totalPrice: (Number(bookingData.amount) > 0) 
+        ? bookingData.amount 
+        : await (async () => {
+            const nights = calculateNights(bookingData.dates.checkIn, bookingData.dates.checkOut)
+            let pricePerNight = Number(room.price) || 0
+            
+            // If room price is 0, try to fetch from its room type
+            if (pricePerNight === 0 && room.roomTypeId) {
+              try {
+                const rt = await db.roomTypes.get(room.roomTypeId)
+                pricePerNight = Number(rt?.basePrice || rt?.base_price) || 0
+              } catch (rtErr) {
+                console.warn('[BookingEngine] Failed to fetch room type price fallback:', rtErr)
+              }
+            }
+            
+            console.log(`[BookingEngine] Amount was 0, resolved price: ${pricePerNight} * ${nights} nights`)
+            return pricePerNight * nights
+          })() || 0,
       numGuests: bookingData.numGuests ?? 1,
       paymentMethod: bookingData.paymentMethod || bookingData.payment_method,
       specialRequests: specialRequests

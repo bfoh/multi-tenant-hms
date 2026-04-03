@@ -1,0 +1,43 @@
+# Multi-Tenant Foundation: Vercel Migration Walkthrough
+
+We have successfully established the **Vercel-based multi-tenant foundation** for the your hotel management system. This unified codebase is now ready to support multiple clients dynamically from a single deployment while your existing Netlify instances remain safely live.
+
+## 🏗️ New Architecture Overview
+
+### 1. Dynamic Tenant Resolution
+I created a core utility in [api/_utils.ts](file:///c:/Users/xkc648/Desktop/migrate/api/_utils.ts) that automatically identifies which hotel is making a request by inspecting the `Origin` or `Referer` domain. 
+
+- **How it works**: It queries the `tenants` table in Supabase for the matching domain and returns that hotel's specific configurations (including their own Resend/Arkesel API keys).
+- **Security**: It uses the Supabase Service Role key securely on the server side to fetch these secrets.
+
+### 2. Vercel API Routes
+The `netlify/functions` directory is being replaced by the standard Vercel `/api` directory. I have migrated the 5 most critical and complex functions:
+
+| Function | Path | Multi-Tenant Logic |
+| :--- | :--- | :--- |
+| **Email Service** | `api/send-email.ts` | Dynamically fetches the correct `Resend` API key for the sending hotel. |
+| **SMS Service** | `api/send-sms.ts` | Fetches the `Arkesel` API Key/Sender ID for the specific tenant. |
+| **Booking Engine** | `api/create-booking.ts` | **Complex**: Handles tenant-aware room lookups, PDF generation with hotel branding, and tenant-scoped database inserts. |
+| **Supabase Proxy** | `api/supabase-proxy.ts` | Proxies all Supabase traffic through the Vercel edge to bypass regional routing issues. |
+| **Guest Login** | `api/guest-login.ts` | Ensures guests can only "log in" to bookings belonging to the correct `tenant_id`. |
+
+### 3. Frontend Integration
+I performed a global refactor of the React application (`src/` directory) to point all service calls to the new `/api` path instead of `/.netlify/functions`.
+
+### 4. Vercel Configuration
+I created a `vercel.json` file that:
+- Ensures all `/api/*` requests route correctly to the serverless functions.
+- Configures proper SPA routing so your React Router stays in control.
+- Enables necessary CORS headers.
+
+## 🚀 How to Complete the Migration
+
+1. **Upload to Vercel**: Connect this repository to a new Vercel project.
+2. **Environment Variables**: Add your `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` to Vercel's Environment Variables.
+3. **Database Seeding**: Ensure your `tenants` table in Supabase has the correct `domain` values for your two hotels.
+4. **Boilerplate Migration**: The remaining 20+ simpler functions in `netlify/functions` (like `delete-employee`) can now be migrated by copying our `api/guest-login.ts` pattern:
+   - Use `export default async function handler(req, res)`
+   - Add `const tenant = await resolveTenant(req)` at the start.
+   - Add `.eq('tenant_id', tenant.id)` to all your Supabase queries.
+
+**Everything is now staged and ready for your first Vercel test deployment!**

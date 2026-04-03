@@ -102,11 +102,13 @@ export function OnsiteBookingPage() {
       const propertiesWithPrices = propertiesData.map((prop: any) => {
         const matchingType =
           filteredTypes.find((rt) => rt.id === prop.propertyTypeId) ||
-          filteredTypes.find((rt) => rt.name.toLowerCase() === (prop.propertyType || '').toLowerCase())
+          filteredTypes.find((rt) => (rt.name || '').toLowerCase() === (prop.propertyType || '').toLowerCase())
+        // Ensure we check both basePrice (from wrapper) and base_price (fallback)
+        const resolvedPrice = Number(matchingType?.basePrice || matchingType?.base_price) || Number(prop.basePrice || prop.base_price) || Number(prop.price) || 0
         return {
           ...prop,
           roomTypeName: matchingType?.name || prop.propertyType || '',
-          displayPrice: matchingType?.basePrice ?? 0
+          displayPrice: resolvedPrice
         }
       })
 
@@ -290,7 +292,7 @@ export function OnsiteBookingPage() {
       roomTypeName: roomType.name,
       roomId: roomObj.id,
       roomNumber: availableProperty.roomNumber,
-      price: roomType.basePrice,
+      price: Number(roomType.basePrice || (roomType as any).base_price) || 0,
       checkIn: checkIn as Date,
       checkOut: checkOut as Date,
       numGuests: numGuests

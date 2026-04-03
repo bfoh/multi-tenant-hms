@@ -1,0 +1,45 @@
+Based on the actual codebase (`bfoh/amplodge`), we will transform the existing Vite + React application into a multi-tenant SaaS. As requested, we will host the new multi-tenant version on **Vercel**, while keeping the existing standalone copies on **Netlify** until the cut-over is complete.
+
+## Proposed Changes
+
+### 1. Proprietary Data Cleanup & Archiving
+- **Archive** all 50+ historical [.md](file:///c:/Users/xkc648/Desktop/migrate/README.md) logs and guides from the repository root into a single `/docs/archive` folder. (Complete)
+- **Scrub** `package.json` and `index.html` of native `amplodge` specifics. (Complete)
+
+### 2. Client-Side Tenant Resolution
+#### [MODIFY] src/services/hotel-settings.ts
+- Refactor the `HotelSettingsService` (which currently uses hardcoded `DEFAULT_SETTINGS` and local PouchDB) to fetch from a central Supabase `tenants` table using `window.location.hostname`.
+- This ensures any custom domain routed to this Vercel instance automatically loads the correct hotel's details and logos.
+
+### 3. Refactoring Hardcoded Values
+- Scrub hardcoded phone numbers, emails (`admin@amplodge.com`), and URLs (`amplodge.org`) from:
+  - `src/services/sms-service.ts`
+  - `src/services/email-service.ts`
+  - `src/lib/hr-form-pdf.ts`
+  - `src/pages/**/*.tsx`
+- These files will securely pull values from the dynamic `HotelSettings` loaded at bootstrap.
+
+### 4. Database Isolation (Supabase)
+#### [NEW] supabase/migrations/00_tenant_schema.sql
+- Provide a SQL rollout template that introduces a `tenants` table.
+- Detail adding `tenant_id` to essential existing tables.
+- Add Row-Level Security (RLS) Policies: E.g., `CREATE POLICY tenant_isolation ON guests USING (tenant_id = (select auth.jwt()->>'tenant_id'));`
+
+### 5. Serverless Functions (Netlify to Vercel)
+#### [NEW] api/*.ts
+- Migrate all logic from `netlify/functions/*.js` to Vercel-compatible `/api` routes.
+- Update function signatures from Lambda-style `(event, context)` to Vercel/Express-style `(req, res)`.
+- Ensure these new API functions support tenant-aware secret injection.
+
+## Rollback Plan
+Since the new multi-tenant architecture uses a different hosting provider (**Vercel**) and a separate unified Supabase database, executing a rollback is extremely safe:
+1. **Retain Original Infrastructure**: The clients' original Netlify projects and original standalone Supabase databases are completely untouched and remain actively live.
+2. **Revert DNS Records**: If a critical issue is discovered post-cutover, simply access your DNS provider (e.g., Hostinger) and revert the `CNAME`/`A` records back to Netlify's values.
+3. **Immediate Restoration**: As soon as DNS propagation completes, the clients will immediately reconnect to their old stable Netlify instances.
+
+## Connecting Customer-Facing Websites
+The new multi-tenant architecture natively supports both the internal Staff Admin Portal and the Customer-Facing Public Websites through the identical codebase and Vercel deployment.
+
+1. **DNS Domain Mapping**: The hotel's unique customer-facing domain (e.g., `www.hotel-abc.com`) is mapped as a "Custom Domain" under the single, unified Vercel project settings.
+2. **Dynamic Client Resolution**: When a guest visits `www.hotel-abc.com`, the global `HotelSettingsService` and `useHotelSettings()` hook inspect the browser's URL and instantly fetch the corresponding tenant configurations from Supabase.
+3. **Unified Codebase Routing**: The guest lands on the public application routes which dynamically adapt to the resolved tenant. If a staff member navigates to `/admin`, the domain resolution ensures they authenticate against the correct hotel's data block.
