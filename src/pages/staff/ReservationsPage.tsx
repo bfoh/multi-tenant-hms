@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { blink } from '@/blink/client'
+import { supabase } from '@/lib/supabase'
 import type { Booking, Room, Guest } from '@/types'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -131,13 +132,41 @@ export function ReservationsPage() {
     if (!user) return
     const load = async () => {
       try {
-        const [b, r, g, rt, charges] = await Promise.all([
+        // Load rooms with room_types joined directly so price is always available
+        const roomsResult = await supabase
+          .from('rooms')
+          .select('*, room_types(id, name, base_price)')
+          .limit(500)
+
+        const rawRooms = (roomsResult.data || []).map((room: any) => {
+          const rt = room.room_types || {}
+          return {
+            id: room.id,
+            roomNumber: room.room_number,
+            roomTypeId: room.room_type_id,
+            status: room.status,
+            price: Number(rt.base_price) || Number(room.price) || 0, // resolved price
+            tenantId: room.tenant_id,
+            _basePrice: Number(rt.base_price) || 0,
+            _roomTypeName: rt.name || '',
+          }
+        })
+
+        const derivedRoomTypes = Array.from(
+          new Map(rawRooms.filter((r: any) => r.roomTypeId).map((r: any) => [
+            r.roomTypeId,
+            { id: r.roomTypeId, name: r._roomTypeName, basePrice: r._basePrice }
+          ])).values()
+        )
+
+        const [b, g, charges] = await Promise.all([
           db.bookings.list({ orderBy: { createdAt: 'desc' }, limit: 500 }),
-          db.rooms.list({ limit: 500 }),
           db.guests.list({ limit: 500 }),
-          db.roomTypes.list({ limit: 100 }),
           db.bookingCharges?.list({ limit: 1000 }) || Promise.resolve([])
         ])
+
+        const r = rawRooms
+        const rt = derivedRoomTypes
 
         // Store charges for calculating totals
         setAllCharges(charges || [])
@@ -301,9 +330,18 @@ export function ReservationsPage() {
 
   // Helper to get total amount (room cost + additional charges)
   // Uses finalAmount if a discount was applied, otherwise totalPrice
+  // Falls back to calculating from room type base_price if totalPrice is 0
   const getBookingTotal = (booking: Booking): number => {
-    // Use finalAmount if discount was applied, otherwise use totalPrice
-    const roomCost = booking.finalAmount ?? booking.totalPrice ?? 0
+    let roomCost = booking.finalAmount || booking.totalPrice || 0
+    // If saved price is 0, calculate from room type (handles legacy bookings saved before price fix)
+    if (roomCost === 0) {
+      const room = roomMap.get(booking.roomId)
+      if (room) {
+        const pricePerNight = getRoomPrice(room)
+        const nights = calculateNights(booking.checkIn, booking.checkOut)
+        roomCost = pricePerNight * nights
+      }
+    }
     const additionalCharges = chargesMap.get(booking.id) || 0
     return roomCost + additionalCharges
   }
