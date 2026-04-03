@@ -123,8 +123,8 @@ export function BookingsPage() {
     if (!selectedProperty) return
 
     const nights = calculateNights(formData.checkIn, formData.checkOut)
-    const selectedRoomType = roomTypes.find((rt: any) => rt.id === selectedProperty.roomTypeId)
-    const pricePerNight = Number(selectedRoomType?.basePrice) || 0
+    const selectedRoomType = roomTypes.find((rt: any) => rt.id === (selectedProperty.propertyTypeId || selectedProperty.roomTypeId))
+    const pricePerNight = Number(selectedRoomType?.basePrice) || Number(selectedProperty.basePrice) || 0
     const calculatedPrice = nights * pricePerNight
 
     setFormData(prev => {
@@ -558,8 +558,8 @@ export function BookingsPage() {
                   >
                     <option value="">Select a room</option>
                     {availableProperties.map((property: any) => {
-                      const roomType = roomTypes.find((rt: any) => rt.id === property.roomTypeId)
-                      const pricePerNight = Number(roomType?.basePrice) || 0
+                      const roomType = roomTypes.find((rt: any) => rt.id === (property.propertyTypeId || property.roomTypeId))
+                      const pricePerNight = Number(roomType?.basePrice) || Number(property.basePrice) || 0
                       return (
                         <option key={property.id} value={property.id}>
                           Room {property.roomNumber} • {roomType?.name || 'Room'} • {formatCurrencySync(pricePerNight, currency)}/night
@@ -665,8 +665,8 @@ export function BookingsPage() {
                     </div>
                     {formData.checkIn && formData.checkOut && formData.propertyId && (() => {
                       const selectedProperty = properties.find((p: any) => p.id === formData.propertyId)
-                      const roomType = selectedProperty ? roomTypes.find((rt: any) => rt.id === selectedProperty.roomTypeId) : null
-                      const pricePerNight = roomType ? Number(roomType.basePrice) : 0
+                      const roomType = selectedProperty ? roomTypes.find((rt: any) => rt.id === (selectedProperty.propertyTypeId || selectedProperty.roomTypeId)) : null
+                      const pricePerNight = roomType ? Number(roomType.basePrice) : Number(selectedProperty?.basePrice) || 0
                       return (
                         <p className="text-xs text-muted-foreground mt-1">
                           {calculateNights(formData.checkIn, formData.checkOut)} night(s) × {formatCurrencySync(pricePerNight, currency)}/night
