@@ -267,9 +267,9 @@ export function BookingsPage() {
       }
 
       // Get room type name from propertyTypeId
-      const selectedRoomType = roomTypes.find((rt: any) => rt.id === selectedProperty.roomTypeId)
+      const selectedRoomType = roomTypes.find((rt: any) => rt.id === (selectedProperty.propertyTypeId || selectedProperty.roomTypeId))
       const roomTypeName = selectedRoomType?.name || ''
-      console.log('[BookingsPage] Room type:', roomTypeName, 'from roomTypeId:', selectedProperty.roomTypeId)
+      console.log('[BookingsPage] Room type:', roomTypeName, 'from propertyTypeId:', selectedProperty.propertyTypeId)
 
       const primaryPaymentMethod = formData.paymentType === 'later'
         ? 'Not paid'
