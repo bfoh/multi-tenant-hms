@@ -37,7 +37,7 @@ export function ReviewSubmissionPage() {
 
         const fetchDetails = async () => {
             try {
-                const res = await fetch(`/api/get-booking-details?bookingId=${bookingId}`)
+                const res = await fetch(`/api/reviews?bookingId=${bookingId}`)
                 if (!res.ok) throw new Error('Booking not found')
                 const data = await res.json()
 
@@ -65,7 +65,7 @@ export function ReviewSubmissionPage() {
 
         setIsSubmitting(true)
         try {
-            const res = await fetch('/api/submit-review', {
+            const res = await fetch('/api/reviews', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({

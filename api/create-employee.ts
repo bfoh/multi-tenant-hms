@@ -13,14 +13,7 @@ export default async function handler(req: any, res: any) {
             return res.status(400).json({ error: 'email, password, and name are required' })
         }
 
-        // Check if user already exists
-        const { data: existing } = await supabaseAdmin.auth.admin.listUsers()
-        const alreadyExists = existing?.users?.some(u => u.email === email)
-        if (alreadyExists) {
-            return res.status(409).json({ error: 'A user with this email already exists' })
-        }
-
-        // Create auth user with tenant_id in app_metadata
+        // Create auth user — Supabase returns an error if email already exists
         const { data, error } = await supabaseAdmin.auth.admin.createUser({
             email,
             password,
@@ -33,20 +26,26 @@ export default async function handler(req: any, res: any) {
         })
 
         if (error) {
+            const alreadyExists = error.message.toLowerCase().includes('already') ||
+                error.message.toLowerCase().includes('duplicate') ||
+                (error as any).status === 422
+            if (alreadyExists) {
+                return res.status(409).json({ error: 'A user with this email already exists' })
+            }
             console.error('[create-employee] Auth error:', error)
             return res.status(400).json({ error: error.message })
         }
 
         const userId = data.user.id
 
-        // Create user profile record
+        // Create user profile record (ignore error if already exists)
         await supabaseAdmin.from('users').insert({
             id: userId,
             email,
             first_login: 1,
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString()
-        })
+        }).select()
 
         return res.status(200).json({
             success: true,

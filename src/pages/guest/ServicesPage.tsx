@@ -20,7 +20,7 @@ export function ServicesPage() {
     const fetchHistory = async () => {
         if (!token) return
         try {
-            const res = await fetch(`/api/get-guest-requests?token=${token}`)
+            const res = await fetch(`/api/guest-requests?token=${token}`)
             const data = await res.json()
             if (data.success) {
                 setRequests(data.requests)
@@ -51,7 +51,7 @@ export function ServicesPage() {
 
         setLoading(true)
         try {
-            const res = await fetch('/api/submit-guest-request', {
+            const res = await fetch('/api/guest-requests', {
                 method: 'POST',
                 body: JSON.stringify({ token, type, details })
             })
