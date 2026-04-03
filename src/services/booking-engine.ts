@@ -237,8 +237,7 @@ class BookingEngine {
         console.log('[BookingEngine] Fallback guest created:', guestId)
       } catch (fallbackErr: any) {
         console.error('[BookingEngine] Fallback guest creation failed:', fallbackErr?.message)
-        // Last resort: use the ID anyway and hope for the best
-        guestId = fallbackId
+        throw new Error('Failed to create guest record: ' + fallbackErr?.message)
       }
     }
 
