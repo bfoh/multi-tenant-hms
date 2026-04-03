@@ -17,6 +17,7 @@ import { toast } from 'sonner'
 import { format } from 'date-fns'
 import { createInvoiceData, downloadInvoicePDF, printInvoice, createPreInvoiceData, downloadPreInvoicePDF, printPreInvoice, PreInvoiceData, createGroupInvoiceData, downloadGroupInvoicePDF } from '@/services/invoice-service'
 import { blink } from '@/blink/client'
+import { supabase } from '@/lib/supabase'
 
 interface InvoiceRecord {
   id: string
@@ -63,100 +64,90 @@ export function StaffInvoiceManager() {
   const [refreshing, setRefreshing] = useState(false)
   const [filter, setFilter] = useState<'all' | 'pending' | 'paid'>('all')
 
-  // Fetch real invoice data from database
+  // Fetch real invoice data from database using direct Supabase join
   const loadInvoices = async () => {
     try {
       console.log('🔍 [StaffInvoiceManager] Loading invoice data...')
 
-      const db = blink.db as any
+      // Single query: bookings joined with rooms and guests, filtered to invoice-relevant statuses
+      const { data: bookingsData, error } = await supabase
+        .from('bookings')
+        .select(`
+          id, status, check_in, check_out, total_price, final_amount,
+          actual_check_out, invoice_number, special_requests,
+          num_guests, created_at,
+          rooms(id, room_number, room_type_id, room_types(name, base_price)),
+          guests(id, name, email, phone)
+        `)
+        .in('status', ['confirmed', 'checked-in', 'checked-out'])
+        .order('created_at', { ascending: false })
+        .limit(200)
 
-      // Fetch BOTH confirmed bookings (pre-invoices) AND checked-out bookings (paid invoices)
-      const [confirmedBookings, checkedOutBookings] = await Promise.all([
-        db.bookings.list({
-          where: { status: 'confirmed' },
-          limit: 100,
-          orderBy: { createdAt: 'desc' }
-        }),
-        db.bookings.list({
-          where: { status: 'checked-out' },
-          limit: 100,
-          orderBy: { createdAt: 'desc' }
-        })
-      ])
-
-      const allBookings = [...confirmedBookings, ...checkedOutBookings]
-
-      console.log('📊 [StaffInvoiceManager] Found bookings:', {
-        confirmed: confirmedBookings.length,
-        checkedOut: checkedOutBookings.length,
-        total: allBookings.length
-      })
-
-      if (allBookings.length === 0) {
-        setInvoices([])
-        setLoading(false)
+      if (error) {
+        console.error('❌ [StaffInvoiceManager] Supabase query error:', error)
+        toast.error('Failed to load invoices')
         return
       }
 
-      // Get guest and room data for each booking
-      const guestIds = [...new Set(allBookings.map((b: any) => b.guestId).filter(Boolean))] as string[]
-      const roomIds = [...new Set(allBookings.map((b: any) => b.roomId).filter(Boolean))] as string[]
+      const allBookings = bookingsData || []
+      console.log('📊 [StaffInvoiceManager] Found bookings:', allBookings.length)
 
-      const [guests, rooms] = await Promise.all([
-        guestIds.length > 0 ? db.guests.list({ where: { id: { in: guestIds } } }) : Promise.resolve([]),
-        roomIds.length > 0 ? db.rooms.list({ where: { id: { in: roomIds } } }) : Promise.resolve([])
-      ])
+      const invoiceRecords: InvoiceRecord[] = allBookings.map((b: any) => {
+        const room = b.rooms || {}
+        const guest = b.guests || {}
+        const rt = room.room_types || {}
+        const isPreInvoice = b.status === 'confirmed' || b.status === 'checked-in'
 
-      // Create maps for quick lookup
-      const guestMap = new Map(guests.map((g: any) => [g.id, g]))
-      const roomMap = new Map(rooms.map((r: any) => [r.id, r]))
-
-      // Convert bookings to invoice records
-      const invoiceRecords: InvoiceRecord[] = allBookings.map((booking: any) => {
-        const guest = booking.guestId ? guestMap.get(booking.guestId) as any : undefined
-        const room = booking.roomId ? roomMap.get(booking.roomId) as any : undefined
-        const isPreInvoice = booking.status === 'confirmed'
-
-        // Generate invoice number
-        const baseInvoiceNumber = booking.invoiceNumber || `INV-${booking.createdAt ? new Date(booking.createdAt).getTime() : Date.now()}`
-        const invoiceNumber = isPreInvoice ? `PRE-${baseInvoiceNumber}` : baseInvoiceNumber
-
-        // Parse metadata from specialRequests if present
-        let groupId = (booking as any).groupId // Try direct property first
-        if (!groupId && booking.specialRequests && typeof booking.specialRequests === 'string') {
-          const match = booking.specialRequests.match(/<!-- GROUP_DATA:(.*?) -->/)
-          if (match && match[1]) {
-            try {
-              const groupData = JSON.parse(match[1])
-              groupId = groupData.groupId
-            } catch (e) {
-              // ignore parse error
-            }
-          }
+        // Parse guest snapshot from special_requests (most reliable source)
+        let guestName = guest.name || ''
+        let guestEmail = guest.email || ''
+        const specialReqs = b.special_requests || ''
+        const snapshotMatch = specialReqs.match(/<!-- GUEST_SNAPSHOT:(.*?) -->/)
+        if (snapshotMatch) {
+          try {
+            const snap = JSON.parse(snapshotMatch[1])
+            if (snap.name) guestName = snap.name
+            if (snap.email) guestEmail = snap.email
+          } catch { /* ignore */ }
         }
 
+        // Parse group data
+        let groupId: string | undefined
+        const groupMatch = specialReqs.match(/<!-- GROUP_DATA:(.*?) -->/)
+        if (groupMatch) {
+          try { groupId = JSON.parse(groupMatch[1]).groupId } catch { /* ignore */ }
+        }
+
+        // Resolve price: final_amount if non-zero, else total_price, else calculate from room type
+        const storedPrice = Number(b.final_amount) || Number(b.total_price) || 0
+        const basePrice = Number(rt.base_price) || 0
+        const nights = b.check_in && b.check_out
+          ? Math.max(1, Math.round((new Date(b.check_out).getTime() - new Date(b.check_in).getTime()) / 86400000))
+          : 0
+        const totalAmount = storedPrice > 0 ? storedPrice : basePrice * nights
+
+        const baseInvoiceNumber = b.invoice_number || `INV-${new Date(b.created_at).getTime()}`
+        const invoiceNumber = isPreInvoice ? `PRE-${baseInvoiceNumber}` : baseInvoiceNumber
+
         return {
-          id: booking.id,
-          invoiceNumber: invoiceNumber,
-          guestName: guest?.name || 'Unknown Guest',
-          guestEmail: guest?.email || '',
-          roomNumber: room?.roomNumber || 'N/A',
-          checkIn: booking.checkIn,
-          checkOut: booking.actualCheckOut || booking.checkOut,
-          totalAmount: booking.totalPrice || 0,
+          id: b.id,
+          invoiceNumber,
+          guestName: guestName || 'Unknown Guest',
+          guestEmail,
+          roomNumber: room.room_number || 'N/A',
+          checkIn: b.check_in,
+          checkOut: b.actual_check_out || b.check_out,
+          totalAmount,
           status: isPreInvoice ? 'pending' as const : 'paid' as const,
-          createdAt: booking.createdAt,
+          createdAt: b.created_at,
           isPreInvoice,
           groupId
         }
       })
 
-      // Sort by createdAt descending
-      invoiceRecords.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-
       console.log('✅ [StaffInvoiceManager] Loaded invoices:', {
         total: invoiceRecords.length,
-        pending: invoiceRecords.filter(i => i.status === 'pending').length,
+        preInvoice: invoiceRecords.filter(i => i.status === 'pending').length,
         paid: invoiceRecords.filter(i => i.status === 'paid').length
       })
       setInvoices(invoiceRecords)
