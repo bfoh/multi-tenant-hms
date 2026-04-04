@@ -64,7 +64,7 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 export function ReservationsPage() {
-  console.log('[ReservationsPage] BUILD_SIGNATURE: TRIPLE_LOCK_HOTFIX_V1_20260404')
+  console.log('[ReservationsPage] BUILD_SIGNATURE: FINAL_RECOVERY_HOTFIX_V4_20260404_1340')
   const db = {
     bookings: {
       list: async (opts?: any) => {
@@ -1042,9 +1042,9 @@ export function ReservationsPage() {
                 <div>
                   <p className="text-sm font-medium text-muted-foreground">Room Cost (Paid)</p>
                   <p className="text-base font-semibold">
-                    {formatCurrencySync(checkOutDialog.finalAmount ?? checkOutDialog.totalPrice, currency)}
+                    {formatCurrencySync(getBookingTotal(checkOutDialog as Booking), currency)}
                   </p>
-                  {checkOutDialog.discountAmount && checkOutDialog.discountAmount > 0 && (
+                  {!!checkOutDialog.discountAmount && checkOutDialog.discountAmount > 0 && (
                     <p className="text-xs text-green-600">
                       Discount applied: -{formatCurrencySync(checkOutDialog.discountAmount, currency)}
                     </p>
@@ -1085,15 +1085,15 @@ export function ReservationsPage() {
                     <span className="font-medium">Grand Total</span>
                     <span className="text-xl font-bold text-primary">
                       {formatCurrencySync(
-                        (checkOutDialog.finalAmount ?? checkOutDialog.totalPrice) + checkoutCharges.reduce((sum, c) => sum + c.amount, 0),
+                        getBookingTotal(checkOutDialog as Booking) + checkoutCharges.reduce((sum, c) => sum + (c.amount || 0), 0),
                         currency
                       )}
                     </span>
                   </div>
-                  {checkoutCharges.length > 0 && (
+                  {(checkoutCharges.length > 0 || (getBookingTotal(checkOutDialog as Booking) > 0)) && (
                     <p className="text-xs text-muted-foreground mt-1">
-                      Room: {formatCurrencySync(checkOutDialog.finalAmount ?? checkOutDialog.totalPrice, currency)} +
-                      Charges: {formatCurrencySync(checkoutCharges.reduce((sum, c) => sum + c.amount, 0), currency)}
+                      Room: {formatCurrencySync(getBookingTotal(checkOutDialog as Booking), currency)} +
+                      Charges: {formatCurrencySync(checkoutCharges.reduce((sum, c) => sum + (c.amount || 0), 0), currency)}
                     </p>
                   )}
                 </div>
