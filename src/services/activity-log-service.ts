@@ -740,6 +740,46 @@ class ActivityLogService {
       return 0
     }
   }
+
+  /**
+   * Subscribe to real-time activity log changes
+   * @param onLog Callback function when a new log is created
+   * @returns Cleanup function to unsubscribe
+   */
+  public subscribeToLogs(onLog: (log: ActivityLog) => void) {
+    const channel = supabase
+      .channel('public:activity_logs_realtime')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'activity_logs',
+        },
+        (payload) => {
+          console.log('[ActivityLog] Real-time log received:', payload)
+          const row = payload.new
+          const log: ActivityLog = {
+            id: row.id,
+            action: row.action,
+            entityType: row.entity_type,
+            entityId: row.entity_id,
+            details: typeof row.details === 'string' ? JSON.parse(row.details) : row.details,
+            userId: row.user_id,
+            metadata: typeof row.metadata === 'string' ? JSON.parse(row.metadata) : row.metadata,
+            createdAt: row.created_at,
+          }
+          onLog(log)
+        }
+      )
+      .subscribe((status) => {
+        console.log('[ActivityLog] Subscription status:', status)
+      })
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }
 }
 
 // Export singleton instance

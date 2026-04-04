@@ -65,6 +65,24 @@ export default async function handler(req: any, res: any) {
             }
         }
 
+        // Log activity
+        await supabaseAdmin.from('activity_logs').insert({
+            id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            action: 'created',
+            entity_type: 'report', // Using report as a proxy for campaign events in this schema
+            entity_id: `campaign-${Date.now()}`,
+            details: JSON.stringify({
+                channel,
+                recipientCount: stats.total,
+                sent: stats.sent,
+                failed: stats.failed,
+                message: `Triggered ${channel} campaign to ${stats.total} guests (${stats.sent} successful).`
+            }),
+            user_id: 'system',
+            tenant_id: tenant.id,
+            created_at: new Date().toISOString()
+        })
+
         return res.status(200).json({ success: true, stats })
 
     } catch (err: any) {

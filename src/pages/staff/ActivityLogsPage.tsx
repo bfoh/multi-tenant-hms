@@ -49,21 +49,21 @@ export function ActivityLogsPage() {
     applyFilters()
   }, [logs, searchQuery, actionFilter, entityTypeFilter, startDate, endDate, userFilter])
 
-  // Auto-refresh effect
+  // Real-time subscription effect
   useEffect(() => {
     if (autoRefresh) {
-      autoRefreshInterval.current = setInterval(() => {
-        loadLogs()
-      }, 30000) // 30 seconds
-    } else {
-      if (autoRefreshInterval.current) {
-        clearInterval(autoRefreshInterval.current)
-        autoRefreshInterval.current = null
-      }
-    }
-    return () => {
-      if (autoRefreshInterval.current) {
-        clearInterval(autoRefreshInterval.current)
+      console.log('[ActivityLogsPage] Enabling real-time monitoring...')
+      const unsubscribe = activityLogService.subscribeToLogs((newLog) => {
+        setLogs(prev => {
+          // Avoid duplicates (in case of double delivery)
+          if (prev.some(l => l.id === newLog.id)) return prev
+          return [newLog, ...prev]
+        })
+        toast.info(`New activity: ${newLog.action} ${newLog.entityType}`)
+      })
+      return () => {
+        console.log('[ActivityLogsPage] Disabling real-time monitoring')
+        unsubscribe()
       }
     }
   }, [autoRefresh])
@@ -626,14 +626,14 @@ export function ActivityLogsPage() {
               Reset Filters
             </Button>
 
-            {/* Auto-refresh Toggle */}
+            {/* real-time Toggle */}
             <Button
               onClick={() => setAutoRefresh(!autoRefresh)}
               variant={autoRefresh ? 'default' : 'outline'}
-              className={`w-full ${autoRefresh ? 'bg-green-600 hover:bg-green-700 text-white' : ''}`}
+              className={`w-full ${autoRefresh ? 'bg-indigo-600 hover:bg-indigo-700 text-white' : ''}`}
             >
               <RefreshCw className={`w-4 h-4 mr-2 ${autoRefresh ? 'animate-spin' : ''}`} />
-              {autoRefresh ? 'Auto-refresh ON (30s)' : 'Auto-refresh OFF'}
+              {autoRefresh ? 'Live Monitoring ON' : 'Live Monitoring OFF'}
             </Button>
           </div>
 

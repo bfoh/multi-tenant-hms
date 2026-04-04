@@ -80,6 +80,23 @@ export default async function handler(req: any, res: any) {
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString()
         })
+        
+        // Log activity
+        await supabaseAdmin.from('activity_logs').insert({
+            id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            action: 'created',
+            entity_type: 'employee',
+            entity_id: userId,
+            details: JSON.stringify({
+                name,
+                email,
+                role: role || 'staff',
+                message: `Created employee: ${name} (${email})`
+            }),
+            user_id: 'system', // API routes act as system or we could derive from JWT if available
+            tenant_id: tenant.id,
+            created_at: new Date().toISOString()
+        })
 
         return res.status(200).json({
             success: true,
