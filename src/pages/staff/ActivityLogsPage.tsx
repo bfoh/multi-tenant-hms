@@ -598,10 +598,11 @@ export function ActivityLogsPage() {
                 <SelectItem value="booking">Booking</SelectItem>
                 <SelectItem value="guest">Guest</SelectItem>
                 <SelectItem value="invoice">Invoice</SelectItem>
+                <SelectItem value="user">User Session</SelectItem>
                 <SelectItem value="staff">Staff</SelectItem>
+                <SelectItem value="employee">Employee</SelectItem>
                 <SelectItem value="payment">Payment</SelectItem>
                 <SelectItem value="room">Room</SelectItem>
-                <SelectItem value="employee">Employee</SelectItem>
                 <SelectItem value="task">Task</SelectItem>
               </SelectContent>
             </Select>

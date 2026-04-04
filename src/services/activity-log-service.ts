@@ -194,17 +194,10 @@ class ActivityLogService {
       // Use provided userId or fall back to current user
       const userId = data.userId || this.currentUserId || 'system'
 
-      // Get the actual user's email for display purposes
-      let userEmail = userId
-      if (userId !== 'system' && userId !== 'guest') {
-        try {
-          const { data: { user } } = await supabase.auth.getUser()
-          userEmail = user?.email || userId
-        } catch (error) {
-          console.warn('[ActivityLog] Failed to get user email, using userId:', error)
-          userEmail = userId
-        }
-      }
+      // Get current user and tenant details
+      const { data: { user } } = await supabase.auth.getUser()
+      const tenantId = user?.app_metadata?.tenant_id
+      const userEmail = user?.email || userId
 
       const logEntry = {
         id: crypto.randomUUID(),
@@ -213,7 +206,11 @@ class ActivityLogService {
         entityId: data.entityId,
         details: JSON.stringify(data.details),
         userId,
-        metadata: JSON.stringify(data.metadata || {}),
+        tenantId, // Include tenantId
+        metadata: JSON.stringify({
+          ...(data.metadata || {}),
+          userEmail: userEmail !== userId ? userEmail : undefined
+        }),
         createdAt: new Date().toISOString(),
       }
 
@@ -234,6 +231,7 @@ class ActivityLogService {
         entity_id: logEntry.entityId,
         details: logEntry.details,
         user_id: userId,
+        tenant_id: logEntry.tenantId, // Ensure tenant_id is persisted
         metadata: logEntry.metadata,
         created_at: logEntry.createdAt,
       })
