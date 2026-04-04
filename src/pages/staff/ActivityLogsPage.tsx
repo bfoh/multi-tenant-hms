@@ -27,27 +27,101 @@ export function ActivityLogsPage() {
 
   useEffect(() => {
     initializePageDatabase()
+    
+    // Safety timeout: if still loading after 15s, force stop the spinner
+    const timeout = setTimeout(() => {
+      setLoading((currentLoading) => {
+        if (currentLoading) {
+          console.warn('[ActivityLogsPage] ⚠️ Page stuck in loading for 15s, forcing complete')
+          return false
+        }
+        return currentLoading
+      })
+    }, 15000)
+
+    return () => clearTimeout(timeout)
   }, [])
 
   async function initializePageDatabase() {
     try {
-      console.log('[ActivityLogsPage] Loading activity logs...')
+      console.log('[ActivityLogsPage] 🚀 Starting page initialization...')
+      
+      // Use allSettled to ensure one failing query doesn't block the other or the whole UI
+      const results = await Promise.allSettled([
+        loadLogs(),
+        loadUsers()
+      ])
 
-      // Load existing logs and users
-      await loadLogs()
-      await loadUsers()
+      const failed = results.filter(r => r.status === 'rejected')
+      if (failed.length > 0) {
+        console.warn('[ActivityLogsPage] ⚠️ Some initialization tasks failed:', failed)
+      }
 
-      console.log('[ActivityLogsPage] ✅ Activity logs loaded successfully')
-
+      console.log('[ActivityLogsPage] ✅ Initialization complete')
     } catch (error) {
-      console.error('[ActivityLogsPage] Failed to load activity logs:', error)
-      toast.error('Failed to load activity logs')
+      console.error('[ActivityLogsPage] ❌ Fatal initialization error:', error)
+      setLoading(false)
+      toast.error('Failed to initialize activity dashboard')
     }
   }
 
+  const applyFilters = useCallback(() => {
+    if (!logs) return
+    
+    let filtered = [...logs]
+
+    // Apply search filter
+    if (searchQuery) {
+      const query = searchQuery.toLowerCase()
+      filtered = filtered.filter(log => {
+        try {
+          const readableDetails = convertDetailsToReadableMessage(log.details || {}).toLowerCase()
+          return (
+            (log.entityType || '').toLowerCase().includes(query) ||
+            (log.action || '').toLowerCase().includes(query) ||
+            (log.entityId || '').toLowerCase().includes(query) ||
+            readableDetails.includes(query)
+          )
+        } catch (e) {
+          return false
+        }
+      })
+    }
+
+    // Apply action filter
+    if (actionFilter !== 'all') {
+      filtered = filtered.filter(log => log.action === actionFilter)
+    }
+
+    // Apply entity type filter
+    if (entityTypeFilter !== 'all') {
+      filtered = filtered.filter(log => log.entityType === entityTypeFilter)
+    }
+
+    // Apply user filter
+    if (userFilter !== 'all') {
+      filtered = filtered.filter(log => log.userId === userFilter)
+    }
+
+    // Apply date range filter
+    if (startDate) {
+      const start = new Date(startDate)
+      start.setHours(0, 0, 0, 0)
+      filtered = filtered.filter(log => new Date(log.createdAt) >= start)
+    }
+
+    if (endDate) {
+      const end = new Date(endDate)
+      end.setHours(23, 59, 59, 999)
+      filtered = filtered.filter(log => new Date(log.createdAt) <= end)
+    }
+
+    setFilteredLogs(filtered)
+  }, [logs, searchQuery, actionFilter, entityTypeFilter, startDate, endDate, userFilter])
+
   useEffect(() => {
     applyFilters()
-  }, [logs, searchQuery, actionFilter, entityTypeFilter, startDate, endDate, userFilter])
+  }, [applyFilters])
 
   // Real-time subscription effect
   useEffect(() => {
@@ -125,27 +199,6 @@ export function ActivityLogsPage() {
     return userId.length > 20 ? `${userId.slice(0, 8)}...` : userId
   }
 
-  // All test functions removed
-
-  function applyFilters() {
-    let filtered = [...logs]
-
-    // Apply search filter
-    if (searchQuery) {
-      const query = searchQuery.toLowerCase()
-      filtered = filtered.filter(log => {
-        const readableDetails = convertDetailsToReadableMessage(log.details).toLowerCase()
-        return (
-          log.entityType.toLowerCase().includes(query) ||
-          log.action.toLowerCase().includes(query) ||
-          log.entityId.toLowerCase().includes(query) ||
-          readableDetails.includes(query)
-        )
-      })
-    }
-
-    setFilteredLogs(filtered)
-  }
 
   function getActionPillColor(action: ActivityAction): string {
     switch (action) {
@@ -195,6 +248,9 @@ export function ActivityLogsPage() {
   }
 
   function convertDetailsToReadableMessage(details: Record<string, any>): string {
+    // Robust safety check
+    if (!details || typeof details !== 'object') return 'No details available'
+    
     // Handle different types of details and create readable messages
     if (details.guestName && details.roomNumber) {
       // Booking-related details

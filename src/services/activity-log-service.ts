@@ -624,7 +624,14 @@ class ActivityLogService {
     limit?: number
     offset?: number
   }): Promise<ActivityLog[]> {
+    const startTime = Date.now()
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('Query timeout after 10s')), 10000)
+    )
+
     try {
+      console.log('[ActivityLog] Fetching logs with options:', options)
+      
       let query = supabase
         .from('activity_logs')
         .select('*')
@@ -639,24 +646,48 @@ class ActivityLogService {
       if (options?.startDate) query = query.gte('created_at', options.startDate.toISOString())
       if (options?.endDate) query = query.lte('created_at', options.endDate.toISOString())
 
-      const { data, error } = await query
+      // Race the query against a timeout
+      const { data, error } = await Promise.race([
+        query,
+        timeoutPromise as any
+      ])
+
       if (error) throw error
 
-      const parsedLogs = (data || []).map((row: any) => ({
-        id: row.id,
-        action: row.action,
-        entityType: row.entity_type,
-        entityId: row.entity_id,
-        details: typeof row.details === 'string' ? JSON.parse(row.details) : row.details,
-        userId: row.user_id,
-        metadata: typeof row.metadata === 'string' ? JSON.parse(row.metadata) : row.metadata,
-        createdAt: row.created_at,
-      }))
+      const parsedLogs = (data || []).map((row: any) => {
+        try {
+          return {
+            id: row.id,
+            action: row.action,
+            entityType: row.entity_type,
+            entityId: row.entity_id,
+            details: typeof row.details === 'string' ? JSON.parse(row.details || '{}') : row.details || {},
+            userId: row.user_id,
+            metadata: typeof row.metadata === 'string' ? JSON.parse(row.metadata || '{}') : row.metadata || {},
+            createdAt: row.created_at,
+          }
+        } catch (parseError) {
+          console.error('[ActivityLog] Failed to parse individual log row:', row.id, parseError)
+          // Fallback for malformed row
+          return {
+            id: row.id,
+            action: row.action || 'unknown',
+            entityType: row.entity_type || 'unknown',
+            entityId: row.entity_id || 'unknown',
+            details: {},
+            userId: row.user_id || 'unknown',
+            metadata: {},
+            createdAt: row.created_at || new Date().toISOString(),
+          }
+        }
+      })
 
-      console.log('[ActivityLog] Retrieved logs:', parsedLogs.length)
+      const duration = Date.now() - startTime
+      console.log(`[ActivityLog] ✅ Retrieved ${parsedLogs.length} logs in ${duration}ms`)
       return parsedLogs
-    } catch (error) {
-      console.error('[ActivityLog] Failed to fetch activity logs:', error)
+    } catch (error: any) {
+      console.error('[ActivityLog] ❌ Failed to fetch activity logs:', error.message || error)
+      // Return empty array instead of throwing to prevent component crash
       return []
     }
   }
