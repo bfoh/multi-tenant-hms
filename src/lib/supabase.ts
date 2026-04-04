@@ -11,34 +11,69 @@ if (!supabaseDirectUrl || !supabaseAnonKey) {
 // function proxy to fix geographic routing failures (Ghana → Ireland direct connection
 // times out). The path is passed as ?_sbpath=... so the function knows where to forward.
 function buildProxyFetch(directUrl: string) {
-    return (input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> => {
-        const controller = new AbortController()
-        const timeout = setTimeout(
-            () => controller.abort(new DOMException('Request timed out', 'TimeoutError')),
-            45000
-        )
-        const existingSignal = init.signal
-        if (existingSignal) {
-            existingSignal.addEventListener('abort', () => controller.abort(existingSignal.reason))
-        }
+    console.log('[Supabase Client] BUILD_SIGNATURE: RESILIENCE_V1_20260404')
+    
+    return async (input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> => {
+        let attempts = 0
+        const maxAttempts = 3
+        let lastError: any = null
 
-        let fetchUrl = typeof input === 'string' ? input
-            : input instanceof URL ? input.href
-            : (input as Request).url
+        while (attempts < maxAttempts) {
+            attempts++
+            const controller = new AbortController()
+            const timeoutId = setTimeout(
+                () => controller.abort(new DOMException('Request timed out', 'TimeoutError')),
+                45000
+            )
 
-        // Rewrite Supabase URLs → Vercel proxy (disabled for debugging - re-enable if geo-routing needed)
-        if (false && import.meta.env.PROD && fetchUrl.startsWith(directUrl)) {
             try {
-                const parsed = new URL(fetchUrl)
-                const proxyUrl = new URL('/api/supabase-proxy', window.location.origin)
-                proxyUrl.searchParams.set('_sbpath', parsed.pathname)
-                parsed.searchParams.forEach((v, k) => proxyUrl.searchParams.set(k, v))
-                fetchUrl = proxyUrl.toString()
-            } catch (_) { /* fall through to original url */ }
+                const existingSignal = init.signal
+                if (existingSignal) {
+                    existingSignal.addEventListener('abort', () => controller.abort(existingSignal.reason))
+                }
+
+                let fetchUrl = typeof input === 'string' ? input
+                    : input instanceof URL ? input.href
+                    : (input as Request).url
+
+                // Rewrite Supabase URLs → Vercel proxy (disabled for debugging)
+                if (false && import.meta.env.PROD && fetchUrl.startsWith(directUrl)) {
+                    try {
+                        const parsed = new URL(fetchUrl)
+                        const proxyUrl = new URL('/api/supabase-proxy', window.location.origin)
+                        proxyUrl.searchParams.set('_sbpath', parsed.pathname)
+                        parsed.searchParams.forEach((v, k) => proxyUrl.searchParams.set(k, v))
+                        fetchUrl = proxyUrl.toString()
+                    } catch (_) { /* fall through */ }
+                }
+
+                const response = await fetch(fetchUrl, { ...init, signal: controller.signal })
+                clearTimeout(timeoutId)
+
+                // If successful or a client error that won't change with retry (like 406), return it
+                if (response.ok || (response.status >= 400 && response.status < 500 && response.status !== 408)) {
+                    return response
+                }
+
+                // If it's a 5xx error, retry
+                console.warn(`[Supabase Client] Attempt ${attempts} failed with status ${response.status}. Retrying...`)
+            } catch (err: any) {
+                clearTimeout(timeoutId)
+                lastError = err
+                if (err.name === 'AbortError' || err.name === 'TimeoutError') {
+                    console.warn(`[Supabase Client] Attempt ${attempts} timed out. Retrying...`)
+                } else {
+                    console.error(`[Supabase Client] Attempt ${attempts} fetch error:`, err)
+                }
+            }
+
+            // Exponential backoff
+            if (attempts < maxAttempts) {
+                await new Promise(resolve => setTimeout(resolve, attempts * 500))
+            }
         }
 
-        return fetch(fetchUrl, { ...init, signal: controller.signal })
-            .finally(() => clearTimeout(timeout))
+        throw lastError || new Error('Max fetch attempts reached')
     }
 }
 
