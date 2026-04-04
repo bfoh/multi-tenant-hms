@@ -22,7 +22,7 @@ export function ActivityLogsPage() {
   const [endDate, setEndDate] = useState('')
   const [userFilter, setUserFilter] = useState<string>('all')
   const [users, setUsers] = useState<Array<{ id: string; name: string }>>([])
-  const [autoRefresh, setAutoRefresh] = useState(false)
+  const [autoRefresh, setAutoRefresh] = useState(true)
   const autoRefreshInterval = useRef<ReturnType<typeof setInterval> | null>(null)
 
   useEffect(() => {
