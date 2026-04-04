@@ -194,19 +194,24 @@ class ActivityLogService {
       // Use provided userId or fall back to current user
       const userId = data.userId || this.currentUserId || 'system'
 
-      const logEntry = {
+      // Prepare the payload mapping clearly to database column names (snake_case)
+      const logEntry: any = {
         id: crypto.randomUUID(),
         action: data.action,
         entity_type: data.entityType,
         entity_id: data.entityId,
-        details: JSON.stringify(data.details),
+        details: JSON.stringify(data.details || {}),
         user_id: userId,
         // tenant_id will be automatically set by the DB trigger
-        metadata: JSON.stringify(data.metadata || {}),
         created_at: new Date().toISOString(),
       }
 
-      console.log('[ActivityLog] Logging activity:', logEntry)
+      // Only include metadata if it's provided (handles cases where column might not exist yet)
+      if (data.metadata) {
+        logEntry.metadata = JSON.stringify(data.metadata)
+      }
+
+      console.log(`[ActivityLog] Attempting to log: ${data.action} on ${data.entityType}...`)
 
       // If offline, queue the log
       if (!this.isOnline) {
@@ -219,15 +224,20 @@ class ActivityLogService {
       const { error: logError } = await supabase.from('activity_logs').insert(logEntry)
 
       if (logError) {
-        console.warn('[ActivityLog] Failed to insert activity log:', logError.message)
+        // Log the exact error to help debugging (especially if columns are missing)
+        console.error('[ActivityLog] Database insertion failed:', {
+          message: logError.message,
+          code: logError.code,
+          hint: logError.hint,
+          details: logError.details
+        })
         this.pendingLogs.push(data)
       } else {
         console.log('[ActivityLog] Activity logged successfully')
       }
     } catch (error) {
       // Catch-all to ensure we never throw from this method
-      console.error('[ActivityLog] Failed to log activity (non-blocking):', error)
-      // Silently queue for potential future retry - don't throw
+      console.error('[ActivityLog] Critical error in logging logic (non-blocking):', error)
       try {
         this.pendingLogs.push(data)
       } catch (queueError) {
