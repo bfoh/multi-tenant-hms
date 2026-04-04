@@ -194,24 +194,16 @@ class ActivityLogService {
       // Use provided userId or fall back to current user
       const userId = data.userId || this.currentUserId || 'system'
 
-      // Get current user and tenant details
-      const { data: { user } } = await supabase.auth.getUser()
-      const tenantId = user?.app_metadata?.tenant_id
-      const userEmail = user?.email || userId
-
       const logEntry = {
         id: crypto.randomUUID(),
         action: data.action,
-        entityType: data.entityType,
-        entityId: data.entityId,
+        entity_type: data.entityType,
+        entity_id: data.entityId,
         details: JSON.stringify(data.details),
-        userId,
-        tenantId, // Include tenantId
-        metadata: JSON.stringify({
-          ...(data.metadata || {}),
-          userEmail: userEmail !== userId ? userEmail : undefined
-        }),
-        createdAt: new Date().toISOString(),
+        user_id: userId,
+        // tenant_id will be automatically set by the DB trigger
+        metadata: JSON.stringify(data.metadata || {}),
+        created_at: new Date().toISOString(),
       }
 
       console.log('[ActivityLog] Logging activity:', logEntry)
@@ -224,17 +216,7 @@ class ActivityLogService {
       }
 
       // Insert directly into activity_logs via Supabase
-      const { error: logError } = await supabase.from('activity_logs').insert({
-        id: logEntry.id,
-        action: logEntry.action,
-        entity_type: logEntry.entityType,
-        entity_id: logEntry.entityId,
-        details: logEntry.details,
-        user_id: userId,
-        tenant_id: logEntry.tenantId, // Ensure tenant_id is persisted
-        metadata: logEntry.metadata,
-        created_at: logEntry.createdAt,
-      })
+      const { error: logError } = await supabase.from('activity_logs').insert(logEntry)
 
       if (logError) {
         console.warn('[ActivityLog] Failed to insert activity log:', logError.message)
@@ -745,59 +727,45 @@ class ActivityLogService {
    * @returns Cleanup function to unsubscribe
    */
   public subscribeToLogs(onLog: (log: ActivityLog) => void) {
-    let channel: any = null
-
-    // We fetch the user/tenant asynchronously but set up the channel immediately
-    // to ensure we don't miss events if the network is fast.
-    const setupSubscription = async () => {
-      try {
-        const { data: { user } } = await supabase.auth.getUser()
-        const tenantId = user?.app_metadata?.tenant_id
-
-        if (!tenantId) {
-          console.warn('[ActivityLog] No tenant_id found for current user, real-time logs might be restricted by RLS.')
-        }
-
-        channel = supabase
-          .channel(`public:activity_logs:${tenantId || 'global'}`)
-          .on(
-            'postgres_changes',
-            {
-              event: 'INSERT',
-              schema: 'public',
-              table: 'activity_logs',
-              // Use explicit filter for performance and security
-              filter: tenantId ? `tenant_id=eq.${tenantId}` : undefined,
-            },
-            (payload) => {
-              console.log('[ActivityLog] Real-time log received:', payload)
-              const row = payload.new
-              const log: ActivityLog = {
-                id: row.id,
-                action: row.action as any,
-                entityType: row.entity_type as any,
-                entityId: row.entity_id,
-                details: typeof row.details === 'string' ? JSON.parse(row.details) : row.details,
-                userId: row.user_id,
-                createdAt: row.created_at,
-              }
-              onLog(log)
+    console.log('[ActivityLog] Setting up robust real-time subscription...')
+    
+    // Simplifed: No manual filters. Rely on database RLS for isolation.
+    const channel = supabase
+      .channel('public:activity_logs:live')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'activity_logs',
+        },
+        (payload) => {
+          console.log('[ActivityLog] Real-time log received from server:', payload)
+          const row = payload.new
+          
+          try {
+            const log: ActivityLog = {
+              id: row.id,
+              action: row.action as any,
+              entityType: row.entity_type as any,
+              entityId: row.entity_id,
+              details: typeof row.details === 'string' ? JSON.parse(row.details || '{}') : row.details || {},
+              userId: row.user_id,
+              createdAt: row.created_at,
             }
-          )
-          .subscribe((status) => {
-            console.log('[ActivityLog] Subscription status:', status)
-          })
-      } catch (error) {
-        console.error('[ActivityLog] Failed to setup real-time subscription:', error)
-      }
-    }
-
-    setupSubscription()
+            onLog(log)
+          } catch (parseError) {
+            console.error('[ActivityLog] Failed to parse real-time log payload:', parseError)
+          }
+        }
+      )
+      .subscribe((status) => {
+        console.log('[ActivityLog] Real-time subscription status:', status)
+      })
 
     return () => {
-      if (channel) {
-        supabase.removeChannel(channel)
-      }
+      console.log('[ActivityLog] Cleaning up real-time subscription')
+      supabase.removeChannel(channel)
     }
   }
 }
