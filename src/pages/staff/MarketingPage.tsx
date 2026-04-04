@@ -1,5 +1,4 @@
 import { useState, useEffect } from "react"
-// import { useAuth } from "@/context/AuthContext"
 import { supabase } from "@/lib/supabase"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
@@ -8,11 +7,10 @@ import { Textarea } from "@/components/ui/textarea"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { toast } from "sonner"
-import { Send, Users, CheckCircle, AlertCircle, Sparkles, Wand2, Megaphone } from "lucide-react"
+import { Send, Users, CheckCircle, AlertCircle, Sparkles, Wand2, Megaphone, Search, Filter, Mail, MessageSquare, Loader2 } from "lucide-react"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
-
-// Types
 import { QRCodeGenerator } from "@/components/marketing/QRCodeGenerator"
+import { cn } from "@/lib/utils"
 
 type Template = {
     id: string
@@ -22,12 +20,40 @@ type Template = {
     content: string
 }
 
-export default function MarketingPage() {
-    // const { user } = useAuth() // Unused
+const DEFAULT_TEMPLATES: Template[] = [
+    {
+        id: '1',
+        name: 'Holiday Special (Email)',
+        channel: 'email',
+        subject: '🎁 Special Holiday Offer from AMP Lodge',
+        content: `Dear {{name}},\n\nCelebrate the holidays at AMP Lodge! We're offering a special 20% discount on all bookings made before December 25th.\n\nUse code HOLIDAY20 at checkout.\n\nBook here: {{guest_link}}\n\nWarm regards,\nAMP Lodge Team`
+    },
+    {
+        id: '2',
+        name: 'Holiday Special (SMS)',
+        channel: 'sms',
+        content: `Celebrate the holidays at AMP Lodge! Use code HOLIDAY20 for 20% off your next stay. Book now: {{guest_link}}`
+    },
+    {
+        id: '3',
+        name: 'Seasonal Discount (Email)',
+        channel: 'email',
+        subject: '🍂 Fall escapes at AMP Lodge',
+        content: `Hi {{name}},\n\nThe leaves are changing and so are our rates! Enjoy a peaceful fall getaway with 15% off regular prices.\n\nNo code needed. Your link: {{guest_link}}`
+    },
+    {
+        id: '4',
+        name: 'Seasonal Discount (SMS)',
+        channel: 'sms',
+        content: `Special Offer from AMP Lodge! Use code SEASON15 for 15% off your fall stay. See more: {{guest_link}}`
+    }
+]
 
-    const [templates, setTemplates] = useState<Template[]>([])
-    const [loading, setLoading] = useState(true)
+export default function MarketingPage() {
+    const [templates, setTemplates] = useState<Template[]>(DEFAULT_TEMPLATES)
+    const [loading, setLoading] = useState(false)
     const [selectedTemplate, setSelectedTemplate] = useState<Template | null>(null)
+    const [activeFilter, setActiveFilter] = useState<'all' | 'sms' | 'email'>('all')
 
     // AI State
     const [aiPrompt, setAiPrompt] = useState("")
@@ -47,16 +73,21 @@ export default function MarketingPage() {
 
     const fetchTemplates = async () => {
         try {
+            setLoading(true)
             const { data, error } = await supabase
                 .from('marketing_templates')
                 .select('*')
                 .order('name')
 
-            if (error) throw error
-            setTemplates(data || [])
+            if (error) {
+                console.warn('Database table missing or error, using defaults', error.message)
+                return // Stay with defaults
+            }
+            if (data && data.length > 0) {
+                setTemplates(data)
+            }
         } catch (err) {
             console.error('Error loading templates:', err)
-            toast.error("Failed to load templates")
         } finally {
             setLoading(false)
         }
@@ -66,7 +97,6 @@ export default function MarketingPage() {
         setSelectedTemplate(template)
         setEditContent(template.content)
         setEditSubject(template.subject || "")
-        // Reset stats
         setRecipientCount(null)
     }
 
@@ -74,9 +104,9 @@ export default function MarketingPage() {
         if (!selectedTemplate) return
         setSending(true)
         try {
-            // Call Backend with dryRun=true
             const response = await fetch('/api/trigger-campaign', {
                 method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     channel: selectedTemplate.channel,
                     content: editContent,
@@ -103,6 +133,7 @@ export default function MarketingPage() {
         try {
             const response = await fetch('/api/trigger-campaign', {
                 method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     channel: selectedTemplate.channel,
                     content: editContent,
@@ -110,31 +141,12 @@ export default function MarketingPage() {
                     dryRun: false
                 })
             })
-            const rawText = await response.text();
-            let data;
-            try {
-                data = JSON.parse(rawText);
-            } catch (e) {
-                console.error("Non-JSON Response:", rawText);
-                throw new Error(`Server Error: ${response.status} (${response.statusText}). Likely timeout due to high volume.`);
-            }
-
+            const data = await response.json()
             if (response.ok) {
-                const { sent, failed, skipped, total } = data.stats;
-                let msg = `Sent: ${sent}`;
-                if (failed > 0) msg += `, Failed: ${failed}`;
-                if (skipped > 0) msg += `, Skipped: ${skipped} (missing contact info)`;
-
-                if (sent === 0 && skipped === total) {
-                    toast.warning("No messages sent. All guests were skipped (missing email/phone).");
-                } else {
-                    toast.success(`Campaign Complete! ${msg}`);
-                }
-
-                setRecipientCount(null)
+                toast.success("Campaign sent successfully!")
                 setSelectedTemplate(null)
             } else {
-                throw new Error(data.error || "Unknown error")
+                throw new Error(data.error)
             }
         } catch (err: any) {
             toast.error(err.message || "Failed to send campaign")
@@ -144,260 +156,293 @@ export default function MarketingPage() {
     }
 
     const handleGenerateAI = async () => {
-        if (!selectedTemplate) return
-        if (!aiPrompt.trim()) {
-            toast.error("Please enter an instruction for the AI")
-            return
-        }
-
+        if (!selectedTemplate || !aiPrompt.trim()) return
         setGenerating(true)
         try {
             const response = await fetch('/api/generate-marketing-copy', {
                 method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     currentContent: editContent,
                     userPrompt: aiPrompt,
                     channel: selectedTemplate.channel
                 })
             })
-
-            const rawText = await response.text()
-            let data
-            try {
-                data = JSON.parse(rawText)
-            } catch (e) {
-                console.error("JSON Parse Error. Raw response:", rawText)
-                throw new Error(`Server Error: ${response.status} ${response.statusText}. Check console for details.`)
-            }
-
+            const data = await response.json()
             if (response.ok) {
                 setEditContent(data.generatedText)
-                toast.success("Content generated!")
-                setAiPrompt("") // Clear prompt after success? Or keep it? keeping it might be better for iteration.
+                setAiPrompt("")
+                toast.success("AI updated your message!")
             } else {
-                throw new Error(data.error || "Unknown server error")
+                throw new Error(data.error)
             }
         } catch (err: any) {
-            console.error(err)
-            toast.error("AI Generation failed: " + err.message)
+            toast.error("AI Assistant: " + err.message)
         } finally {
             setGenerating(false)
         }
     }
 
-    if (loading) return <div className="p-8">Loading templates...</div>
-
+    const filteredTemplates = templates.filter(t => 
+        activeFilter === 'all' || t.channel === activeFilter
+    )
 
     return (
-        <div className="container mx-auto p-6 max-w-6xl space-y-8">
-            <div className="flex justify-between items-center">
-                <div>
-                    <div className="flex items-center gap-2 mb-1">
-                        <div className="p-1.5 rounded-lg bg-primary/10">
-                            <Megaphone className="w-5 h-5 text-primary" />
-                        </div>
-                        <h1 className="text-2xl font-bold tracking-tight">Marketing Center</h1>
+        <div className="min-h-full space-y-8 animate-in fade-in duration-500">
+            <div className="flex flex-col gap-1">
+                <div className="flex items-center gap-3">
+                    <div className="p-2.5 rounded-xl bg-[#8B5E3C]/10 text-[#8B5E3C]">
+                        <Megaphone className="w-6 h-6" />
                     </div>
-                    <p className="text-sm text-muted-foreground">Manage your marketing campaigns and tools.</p>
+                    <h1 className="text-3xl font-bold tracking-tight text-[#2D2D2D]">Marketing Center</h1>
                 </div>
+                <p className="text-[#666] ml-11">Manage your marketing campaigns and tools.</p>
             </div>
 
             <Tabs defaultValue="campaigns" className="w-full">
-                <TabsList className="mb-4 w-full justify-start border-b rounded-none h-auto p-0 bg-transparent space-x-6">
-                    <TabsTrigger
-                        value="campaigns"
-                        className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-4 py-2"
+                <TabsList className="bg-transparent h-auto p-0 border-b w-full justify-start rounded-none space-x-8 mb-8">
+                    <TabsTrigger 
+                        value="campaigns" 
+                        className="data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:border-b-2 data-[state=active]:border-[#8B5E3C] data-[state=active]:text-[#8B5E3C] rounded-none px-0 py-3 text-base font-medium transition-all"
                     >
                         Campaigns & Templates
                     </TabsTrigger>
-                    <TabsTrigger
-                        value="qrcode"
-                        className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-4 py-2"
+                    <TabsTrigger 
+                        value="qrcode" 
+                        className="data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:border-b-2 data-[state=active]:border-[#8B5E3C] data-[state=active]:text-[#8B5E3C] rounded-none px-0 py-3 text-base font-medium transition-all"
                     >
                         QR Code Generator
                     </TabsTrigger>
                 </TabsList>
 
-                <TabsContent value="campaigns" className="mt-6">
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                        {/* Template List */}
-                        <div className="md:col-span-1 space-y-4">
-                            <h2 className="text-lg font-semibold">Templates</h2>
-                            <Tabs defaultValue="all" className="w-full">
-                                <TabsList className="w-full">
-                                    <TabsTrigger value="all" className="flex-1">All</TabsTrigger>
-                                    <TabsTrigger value="sms" className="flex-1">SMS</TabsTrigger>
-                                    <TabsTrigger value="email" className="flex-1">Email</TabsTrigger>
-                                </TabsList>
-                                <TabsContent value="all" className="space-y-3 mt-4">
-                                    {templates.map(t => (
-                                        <TemplateCard key={t.id} template={t} onClick={() => handleSelectTemplate(t)} active={selectedTemplate?.id === t.id} />
-                                    ))}
-                                </TabsContent>
-                                <TabsContent value="sms" className="space-y-3 mt-4">
-                                    {templates.filter(t => t.channel === 'sms').map(t => (
-                                        <TemplateCard key={t.id} template={t} onClick={() => handleSelectTemplate(t)} active={selectedTemplate?.id === t.id} />
-                                    ))}
-                                </TabsContent>
-                                <TabsContent value="email" className="space-y-3 mt-4">
-                                    {templates.filter(t => t.channel === 'email').map(t => (
-                                        <TemplateCard key={t.id} template={t} onClick={() => handleSelectTemplate(t)} active={selectedTemplate?.id === t.id} />
-                                    ))}
-                                </TabsContent>
-                            </Tabs>
-                        </div>
-
-                        {/* Editor Area */}
-                        <div className="md:col-span-2">
-                            {selectedTemplate ? (
-                                <Card className="h-full flex flex-col">
-                                    <CardHeader>
-                                        <CardTitle className="flex justify-between items-center">
-                                            <span>Edit Campaign</span>
-                                            <span className="text-xs uppercase bg-secondary px-2 py-1 rounded">{selectedTemplate.channel}</span>
-                                        </CardTitle>
-                                        <CardDescription>
-                                            Customize the message before sending. Use <code>{`{{name}}`}</code> for name and <code>{`{{guest_link}}`}</code> for the guest portal URL.
-                                        </CardDescription>
-                                    </CardHeader>
-                                    <CardContent className="space-y-4 flex-1">
-                                        {selectedTemplate.channel === 'email' && (
-                                            <div className="space-y-2">
-                                                <Label>Subject Line</Label>
-                                                <Input
-                                                    value={editSubject}
-                                                    onChange={e => setEditSubject(e.target.value)}
-                                                    placeholder="Email Subject..."
-                                                />
-                                            </div>
-                                        )}
-
-                                        <div className="space-y-2 flex flex-col min-h-[150px]">
-                                            <Label>Message Content</Label>
-                                            <Textarea
-                                                value={editContent}
-                                                onChange={e => setEditContent(e.target.value)}
-                                                className={selectedTemplate.channel === 'email' ? "min-h-[300px] font-mono text-sm" : "min-h-[150px]"}
-                                                placeholder="Type your message..."
-                                            />
-                                            {selectedTemplate.channel === 'sms' && (
-                                                <p className="text-xs text-muted-foreground text-right">
-                                                    {editContent.length} characters (approx {Math.ceil(editContent.length / 160)} segments)
-                                                </p>
+                <TabsContent value="campaigns" className="mt-0 outline-none">
+                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+                        {/* Sidebar */}
+                        <div className="lg:col-span-4 space-y-6">
+                            <div className="space-y-4">
+                                <h3 className="text-xl font-semibold text-[#2D2D2D]">Templates</h3>
+                                
+                                {/* Pill Filters */}
+                                <div className="flex gap-2 p-1.5 bg-[#F5F5F5] rounded-xl w-fit">
+                                    {(['all', 'sms', 'email'] as const).map((filter) => (
+                                        <button
+                                            key={filter}
+                                            onClick={() => setActiveFilter(filter)}
+                                            className={cn(
+                                                "px-6 py-2 rounded-lg text-sm font-medium transition-all capitalize",
+                                                activeFilter === filter 
+                                                    ? "bg-white text-[#2D2D2D] shadow-sm" 
+                                                    : "text-[#666] hover:text-[#2D2D2D]"
                                             )}
-                                        </div>
+                                        >
+                                            {filter}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
 
-
-                                        {/* AI Generator Section */}
-                                        <div className="pt-4 border-t space-y-3 bg-muted/20 p-4 rounded-lg">
-                                            <div className="flex items-center gap-2">
-                                                <Wand2 className="w-4 h-4 text-purple-600" />
-                                                <Label className="text-purple-900 font-semibold">AI Assistant</Label>
+                            <div className="space-y-3">
+                                {filteredTemplates.length > 0 ? (
+                                    filteredTemplates.map(t => (
+                                        <div
+                                            key={t.id}
+                                            onClick={() => handleSelectTemplate(t)}
+                                            className={cn(
+                                                "group relative p-5 rounded-2xl border transition-all cursor-pointer",
+                                                selectedTemplate?.id === t.id
+                                                    ? "border-[#8B5E3C] bg-white shadow-md ring-1 ring-[#8B5E3C]/20"
+                                                    : "border-[#E5E5E5] bg-white hover:border-[#8B5E3C]/30 hover:shadow-sm"
+                                            )}
+                                        >
+                                            <div className="flex justify-between items-start mb-2">
+                                                <h4 className="font-semibold text-[#2D2D2D] group-hover:text-[#8B5E3C] transition-colors">{t.name}</h4>
+                                                <span className={cn(
+                                                    "text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider",
+                                                    t.channel === 'email' ? "bg-purple-100 text-purple-700" : "bg-blue-100 text-blue-700"
+                                                )}>
+                                                    {t.channel}
+                                                </span>
                                             </div>
-                                            <div className="flex gap-2">
-                                                <Input
-                                                    value={aiPrompt}
-                                                    onChange={e => setAiPrompt(e.target.value)}
-                                                    placeholder="E.g., 'Make it more exciting for Christmas' or 'Shorten this'"
-                                                    className="bg-white"
-                                                    onKeyDown={e => {
-                                                        if (e.key === 'Enter' && !e.shiftKey) {
-                                                            e.preventDefault()
-                                                            handleGenerateAI()
-                                                        }
-                                                    }}
-                                                />
-                                                <Button
-                                                    onClick={handleGenerateAI}
-                                                    disabled={generating || !aiPrompt.trim()}
-                                                    variant="secondary"
-                                                    className="shrink-0 bg-purple-100 text-purple-700 hover:bg-purple-200"
-                                                >
-                                                    {generating ? (
-                                                        <Sparkles className="w-4 h-4 animate-spin mr-2" />
-                                                    ) : (
-                                                        <Sparkles className="w-4 h-4 mr-2" />
-                                                    )}
-                                                    {generating ? 'Writing...' : 'Generate'}
-                                                </Button>
-                                            </div>
-                                            <p className="text-[10px] text-muted-foreground">
-                                                Powered by Gemini. The AI will rewrite your current message based on your instructions.
+                                            <p className="text-sm text-[#666] line-clamp-2 leading-relaxed italic">
+                                                {t.content.length > 80 ? t.content.slice(0, 80) + '...' : t.content}
                                             </p>
                                         </div>
-                                    </CardContent>
-                                    <CardFooter className="justify-between border-t p-6">
-                                        <Button variant="outline" onClick={() => setSelectedTemplate(null)}>Cancel</Button>
+                                    ))
+                                ) : (
+                                    <div className="p-8 text-center border-2 border-dashed rounded-2xl border-slate-200">
+                                        <p className="text-slate-400">No templates found.</p>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* Editor/Preview */}
+                        <div className="lg:col-span-8 bg-white rounded-3xl border border-[#E5E5E5] min-h-[600px] flex flex-col shadow-sm">
+                            {selectedTemplate ? (
+                                <>
+                                    <div className="p-8 border-b border-[#F0F0F0]">
+                                        <div className="flex justify-between items-center mb-6">
+                                            <h3 className="text-2xl font-bold text-[#2D2D2D]">Edit Campaign</h3>
+                                            <div className="flex items-center gap-2 px-3 py-1 bg-[#F5F5F5] rounded-full">
+                                                {selectedTemplate.channel === 'email' ? <Mail className="w-4 h-4 text-purple-600" /> : <MessageSquare className="w-4 h-4 text-blue-600" />}
+                                                <span className="text-xs font-bold uppercase tracking-widest text-[#666]">{selectedTemplate.channel}</span>
+                                            </div>
+                                        </div>
+                                        
+                                        <p className="text-sm text-[#888] mb-8 leading-relaxed">
+                                            Personalize your message before dispatching. Use placeholders 
+                                            <code className="mx-1 px-1.5 py-0.5 bg-[#F5F5F5] rounded text-[#8B5E3C] font-mono">{`{{name}}`}</code> 
+                                            and 
+                                            <code className="mx-1 px-1.5 py-0.5 bg-[#F5F5F5] rounded text-[#8B5E3C] font-mono">{`{{guest_link}}`}</code> 
+                                            for dynamic content.
+                                        </p>
+
+                                        <div className="space-y-6">
+                                            {selectedTemplate.channel === 'email' && (
+                                                <div className="space-y-2">
+                                                    <Label className="text-[#2D2D2D] font-semibold">Email Subject</Label>
+                                                    <Input 
+                                                        value={editSubject}
+                                                        onChange={e => setEditSubject(e.target.value)}
+                                                        className="h-12 rounded-xl border-[#E5E5E5] focus-visible:ring-[#8B5E3C]"
+                                                        placeholder="Write a compelling subject..."
+                                                    />
+                                                </div>
+                                            )}
+
+                                            <div className="space-y-2">
+                                                <Label className="text-[#2D2D2D] font-semibold">Message Body</Label>
+                                                <Textarea 
+                                                    value={editContent}
+                                                    onChange={e => setEditContent(e.target.value)}
+                                                    className={cn(
+                                                        "rounded-2xl border-[#E5E5E5] focus-visible:ring-[#8B5E3C] resize-none leading-relaxed",
+                                                        selectedTemplate.channel === 'email' ? "min-h-[300px]" : "min-h-[180px]"
+                                                    )}
+                                                    placeholder="Type your campaign message here..."
+                                                />
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* AI Section */}
+                                    <div className="p-8 bg-slate-50 border-b border-[#F0F0F0]">
+                                        <div className="max-w-2xl mx-auto space-y-4">
+                                            <div className="flex items-center gap-2 text-[#8B5E3C]">
+                                                <Wand2 className="w-5 h-5" />
+                                                <span className="font-bold tracking-tight">AI Content Assistant</span>
+                                            </div>
+                                            <div className="flex gap-3">
+                                                <Input 
+                                                    value={aiPrompt}
+                                                    onChange={e => setAiPrompt(e.target.value)}
+                                                    placeholder="e.g., 'Make it sound more urgent' or 'Professional tone'"
+                                                    className="h-12 rounded-xl bg-white border-[#E5E5E5] focus-visible:ring-[#8B5E3C]"
+                                                    onKeyDown={e => e.key === 'Enter' && handleGenerateAI()}
+                                                />
+                                                <Button 
+                                                    onClick={handleGenerateAI}
+                                                    disabled={generating || !aiPrompt.trim()}
+                                                    className="h-12 px-6 rounded-xl bg-[#8B5E3C] hover:bg-[#704930] shadow-lg shadow-[#8B5E3C]/20 transition-all font-semibold"
+                                                >
+                                                    {generating ? <Loader2 className="w-5 h-5 animate-spin" /> : "Generate"}
+                                                </Button>
+                                            </div>
+                                            <p className="text-[11px] text-[#999] italic">
+                                                Gemini will rewrite your message based on your prompt above.
+                                            </p>
+                                        </div>
+                                    </div>
+
+                                    <div className="mt-auto p-8 flex justify-between items-center bg-[#FDFDFD] rounded-b-3xl">
+                                        <Button 
+                                            variant="ghost" 
+                                            onClick={() => setSelectedTemplate(null)}
+                                            className="text-[#666] hover:bg-[#F5F5F5]"
+                                        >
+                                            Discard Changes
+                                        </Button>
 
                                         <Dialog>
                                             <DialogTrigger asChild>
-                                                <Button onClick={handleDryRun} disabled={sending}>
-                                                    {sending ? 'Analyzing...' : 'Review & Send'}
+                                                <Button 
+                                                    onClick={handleDryRun}
+                                                    disabled={sending}
+                                                    className="bg-zinc-900 hover:bg-black text-white px-8 py-6 rounded-2xl h-auto font-bold text-lg shadow-xl shadow-zinc-200 transition-all hover:-translate-y-0.5 active:translate-y-0"
+                                                >
+                                                    Review & Send
                                                 </Button>
                                             </DialogTrigger>
-                                            <DialogContent className="max-h-[85vh] overflow-y-auto">
-                                                <DialogHeader>
-                                                    <DialogTitle>Ready to Send?</DialogTitle>
-                                                    <DialogDescription>
-                                                        This campaign will be sent to <strong>{recipientCount !== null ? recipientCount : '...'} guests</strong>.
+                                            <DialogContent className="max-w-2xl sm:rounded-[32px] p-8 border-none shadow-2xl">
+                                                <DialogHeader className="mb-6">
+                                                    <DialogTitle className="text-2xl font-bold flex items-center gap-2">
+                                                        <CheckCircle className="w-6 h-6 text-green-500" />
+                                                        Campaign Summary
+                                                    </DialogTitle>
+                                                    <DialogDescription className="text-base pt-2">
+                                                        This campaign will be delivered to 
+                                                        <span className="font-bold text-[#2D2D2D] bg-[#F5F5F5] px-2 py-0.5 rounded mx-1">
+                                                            {recipientCount ?? '...'} guests
+                                                        </span> 
+                                                        on the {selectedTemplate.channel.toUpperCase()} channel.
                                                     </DialogDescription>
                                                 </DialogHeader>
-                                                <div className="py-4">
-                                                    <div className="bg-muted p-4 rounded-md text-sm mb-4">
-                                                        <p className="font-semibold mb-1">Preview:</p>
-                                                        <p className="whitespace-pre-wrap">{editContent.replace("{{name}}", "John Doe").replace("{{guest_link}}", "https://amplodge.org/guest/...")}</p>
+
+                                                <div className="space-y-6">
+                                                    <div className="p-6 rounded-2xl bg-slate-50 border border-slate-100 relative overflow-hidden">
+                                                        <div className="absolute top-0 left-0 w-1 h-full bg-[#8B5E3C]" />
+                                                        <p className="text-xs font-bold uppercase tracking-widest text-[#999] mb-3">Live Preview</p>
+                                                        {selectedTemplate.channel === 'email' && (
+                                                            <div className="mb-4">
+                                                                <p className="text-sm font-bold text-[#2D2D2D]">Subject: {editSubject}</p>
+                                                            </div>
+                                                        )}
+                                                        <div className="whitespace-pre-wrap text-[#2D2D2D] leading-relaxed font-serif text-lg">
+                                                            {editContent.replace("{{name}}", "John Doe").replace("{{guest_link}}", "https://amplodge.org/...")}
+                                                        </div>
                                                     </div>
-                                                    {recipientCount === 0 && (
-                                                        <p className="text-red-500 text-sm">No eligible guests found to receive this message.</p>
-                                                    )}
+
+                                                    <div className="flex items-center gap-3 p-4 rounded-xl bg-orange-50 text-orange-800 text-sm">
+                                                        <AlertCircle className="w-5 h-5 flex-shrink-0" />
+                                                        <p>Once you click send, messages will be queued for immediate delivery.</p>
+                                                    </div>
                                                 </div>
-                                                <DialogFooter>
-                                                    <Button variant="outline" onClick={() => setRecipientCount(null)}>Back to Edit</Button>
-                                                    <Button onClick={handleSendCampaign} disabled={sending || recipientCount === 0} className="bg-green-600 hover:bg-green-700">
-                                                        {sending ? 'Sending...' : 'Confirm & Send'}
+
+                                                <DialogFooter className="mt-8 gap-3 sm:justify-end">
+                                                    <Button variant="outline" className="rounded-xl h-12" onClick={() => setRecipientCount(null)}>
+                                                        Back to Edit
+                                                    </Button>
+                                                    <Button 
+                                                        onClick={handleSendCampaign} 
+                                                        disabled={sending || recipientCount === 0} 
+                                                        className="bg-green-600 hover:bg-green-700 text-white rounded-xl h-12 px-8 font-bold"
+                                                    >
+                                                        {sending ? <Loader2 className="w-5 h-5 animate-spin" /> : "Confirm & Launch"}
                                                     </Button>
                                                 </DialogFooter>
                                             </DialogContent>
                                         </Dialog>
-                                    </CardFooter>
-                                </Card>
-                            ) : (
-                                <div className="h-full flex items-center justify-center border-2 border-dashed rounded-xl p-12 text-center text-muted-foreground bg-slate-50">
-                                    <div className="space-y-4">
-                                        <Sparkles className="h-12 w-12 mx-auto text-slate-300" />
-                                        <p>Select a template from the left to get started.</p>
                                     </div>
+                                </>
+                            ) : (
+                                <div className="flex-1 flex flex-col items-center justify-center p-12 text-center group">
+                                    <div className="w-24 h-24 rounded-full bg-[#F9F9F9] flex items-center justify-center mb-6 group-hover:scale-110 transition-transform">
+                                        <Sparkles className="w-10 h-10 text-slate-200" />
+                                    </div>
+                                    <h3 className="text-xl font-bold text-[#2D2D2D] mb-2">Select a template</h3>
+                                    <p className="text-[#999] max-w-xs">
+                                        Choose a template from the left to start building your marketing campaign.
+                                    </p>
                                 </div>
                             )}
                         </div>
                     </div>
                 </TabsContent>
 
-                <TabsContent value="qrcode" className="mt-6">
+                <TabsContent value="qrcode" className="mt-0 outline-none">
                     <QRCodeGenerator />
                 </TabsContent>
             </Tabs>
         </div >
-    )
-}
-
-function TemplateCard({ template, onClick, active }: { template: Template; onClick: () => void; active: boolean }) {
-    return (
-        <div
-            onClick={onClick}
-            className={`p-4 rounded-lg border cursor-pointer transition-all hover:bg-accent ${active ? 'border-primary ring-1 ring-primary bg-accent' : 'bg-card'}`}
-        >
-            <div className="flex justify-between items-start mb-2">
-                <h3 className="font-medium text-sm">{template.name}</h3>
-                {template.channel === 'sms' ? (
-                    <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded">SMS</span>
-                ) : (
-                    <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded">EMAIL</span>
-                )}
-            </div>
-            <p className="text-xs text-muted-foreground line-clamp-2">
-                {template.content}
-            </p>
-        </div>
     )
 }

@@ -4,14 +4,12 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
-import { Textarea } from "@/components/ui/textarea"
 import { toast } from "sonner"
-import { Printer, Mail, MessageSquare, Download, Share2 } from "lucide-react"
-import html2canvas from "html2canvas"
+import { Printer, Mail, MessageSquare, Download, Share2, Loader2 } from "lucide-react"
 
 export function QRCodeGenerator() {
+    console.log('[QRCodeGenerator] BUILD_SIGNATURE: PREMIUM_MARKETING_V1_20260404')
     const [url, setUrl] = useState("https://www.amplodge.org")
     const [size, setSize] = useState(300)
     const qrRef = useRef<HTMLDivElement>(null)
@@ -31,15 +29,17 @@ export function QRCodeGenerator() {
         const printWindow = window.open('', '', 'height=600,width=800');
         if (!printWindow) return;
 
-        // capture the QR code canvas data URL
         const canvas = qrRef.current?.querySelector('canvas');
         if (!canvas) return;
         const dataUrl = canvas.toDataURL();
 
         printWindow.document.write('<html><head><title>Print QR Code</title>');
-        printWindow.document.write('</head><body style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;">');
-        printWindow.document.write(`<img src="${dataUrl}" style="width: 500px; max-width: 100%;" />`);
-        printWindow.document.write(`<p style="font-family:sans-serif;margin-top:20px;font-size:24px;">${url}</p>`);
+        printWindow.document.write('</head><body style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;background-color:#FDFDFD;">');
+        printWindow.document.write(`<div style="padding:40px; background:white; border-radius:40px; border:1px solid #E5E5E5; box-shadow: 0 20px 40px rgba(0,0,0,0.05); text-align:center;">`);
+        printWindow.document.write(`<img src="${dataUrl}" style="width: 400px; max-width: 100%; border-radius: 20px;" />`);
+        printWindow.document.write(`<h1 style="font-family:sans-serif;margin-top:30px;font-size:32px;color:#2D2D2D;font-weight:900;letter-spacing:-0.02em;">AMP LODGE</h1>`);
+        printWindow.document.write(`<p style="font-family:sans-serif;margin-top:10px;font-size:20px;color:#8B5E3C;font-weight:bold;">${url}</p>`);
+        printWindow.document.write(`</div>`);
         printWindow.document.write('</body></html>');
         printWindow.document.close();
         printWindow.focus();
@@ -62,31 +62,31 @@ export function QRCodeGenerator() {
 
     const handleSendEmail = async () => {
         if (!emailTo) return toast.error("Please enter an email address");
-
         setEmailSending(true);
         try {
             const canvas = qrRef.current?.querySelector('canvas');
             if (!canvas) throw new Error("Could not generate QR code image");
-
-            // Convert to base64
             const dataUrl = canvas.toDataURL('image/png');
-            // Remove header
-            // const base64Content = dataUrl.split(',')[1];
-
             const response = await fetch('/api/send-email', {
                 method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     to: emailTo,
                     subject: emailSubject,
                     html: `
-                        <h2>Here is the QR Code for AMP Lodge</h2>
-                        <p>Scan this code to visit our website.</p>
-                        <p>Or visit: <a href="${url}">${url}</a></p>
+                        <div style="font-family:sans-serif; text-align:center; padding: 40px; background-color: #FDFDFD;">
+                            <h2 style="color: #8B5E3C;">Your AMP Lodge QR Code</h2>
+                            <p style="color: #666;">Scan this code to visit our digital portal.</p>
+                            <div style="margin: 30px auto; display: inline-block; padding: 20px; background: white; border-radius: 20px; border: 1px solid #E5E5E5;">
+                                <img src="${dataUrl}" style="width: 250px;" />
+                            </div>
+                            <p style="margin-top: 20px;">Or visit: <a href="${url}" style="color: #8B5E3C; font-weight: bold;">${url}</a></p>
+                        </div>
                     `,
                     attachments: [
                         {
                             filename: 'amplodge-qr.png',
-                            content: dataUrl, // Function handles data URI
+                            content: dataUrl,
                             contentType: 'image/png'
                         }
                     ]
@@ -110,21 +110,17 @@ export function QRCodeGenerator() {
 
     const handleSendSMS = async () => {
         if (!smsTo) return toast.error("Please enter a phone number");
-
         setSmsSending(true);
         try {
             const response = await fetch('/api/send-sms', {
                 method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     to: smsTo,
                     message: `Visit AMP Lodge website here: ${url}`
                 })
             });
-
             const data = await response.json();
-
-            // Check nested success structure from existing SMS function logic
-            // The function returns { success: true, results: { sms: ... } } on success
             if (response.ok && data.success) {
                 toast.success("SMS sent successfully!");
                 setSmsOpen(false);
@@ -140,124 +136,97 @@ export function QRCodeGenerator() {
     }
 
     return (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-            <Card>
-                <CardHeader>
-                    <CardTitle>QR Code Settings</CardTitle>
-                    <CardDescription>Configure the QR code content and size.</CardDescription>
+        <div className="grid grid-cols-1 xl:grid-cols-12 gap-8 items-start animate-in zoom-in-95 duration-500">
+            <Card className="xl:col-span-5 rounded-[32px] border-[#E5E5E5] shadow-sm overflow-hidden">
+                <CardHeader className="bg-slate-50 border-b border-slate-100 p-8">
+                    <CardTitle className="text-2xl font-bold text-[#2D2D2D]">QR Configuration</CardTitle>
+                    <CardDescription className="text-base">Point your guests exactly where they need to go.</CardDescription>
                 </CardHeader>
-                <CardContent className="space-y-4">
+                <CardContent className="p-8 space-y-6">
                     <div className="space-y-2">
-                        <Label>Target URL</Label>
+                        <Label className="text-[#2D2D2D] font-semibold">Target Redirect URL</Label>
                         <Input
                             value={url}
                             onChange={(e) => setUrl(e.target.value)}
-                            placeholder="https://www.amplodge.org"
+                            className="h-14 rounded-2xl border-[#E5E5E5] focus-visible:ring-[#8B5E3C] text-lg font-medium"
+                            placeholder="https://www.amplodge.org/guest/..."
                         />
                     </div>
                 </CardContent>
-                <CardFooter className="flex-col gap-2 items-start">
-                    <p className="text-sm text-muted-foreground">
-                        This QR code directs users to the main website. You can print it for marketing materials or send it directly to guests.
-                    </p>
+                <CardFooter className="bg-[#FDFDFD] p-8 border-t border-slate-100 flex-col gap-4 items-start">
+                    <div className="flex gap-4 p-4 rounded-2xl bg-orange-50 text-orange-800 text-sm">
+                        <Share2 className="w-5 h-5 flex-shrink-0" />
+                        <p className="leading-relaxed">
+                            This QR code is dynamically updated. You can print it for your reception desk 
+                            or send it directly to arriving guests.
+                        </p>
+                    </div>
                 </CardFooter>
             </Card>
 
-            <Card className="flex flex-col items-center justify-center p-6 bg-slate-50">
-                <div ref={qrRef} className="bg-white p-4 rounded-xl shadow-sm border mb-6">
+            <Card className="xl:col-span-7 flex flex-col items-center justify-center p-12 bg-white rounded-[40px] border border-[#E5E5E5] shadow-xl relative overflow-hidden group">
+                <div className="absolute inset-0 bg-[radial-gradient(#8B5E3C_1px,transparent_1px)] [background-size:20px_20px] opacity-[0.03]" />
+                
+                <div ref={qrRef} className="relative z-10 bg-white p-8 rounded-[48px] shadow-2xl border border-slate-100 transition-all duration-500 group-hover:scale-105 group-hover:rotate-1">
                     <QRCodeCanvas
                         value={url}
                         size={size}
                         level={"H"}
                         includeMargin={true}
-                        imageSettings={{
-                            src: "/amp-logo.png",
-                            x: undefined,
-                            y: undefined,
-                            height: size * 0.2, // 20% of size
-                            width: size * 0.2,
-                            excavate: true,
-                        }}
                     />
                 </div>
 
-                <div className="flex flex-wrap gap-2 justify-center">
-                    <Button onClick={handlePrint} variant="outline" className="gap-2">
-                        <Printer className="w-4 h-4" />
-                        Print
+                <div className="relative z-10 mt-12 flex flex-wrap gap-4 justify-center">
+                    <Button onClick={handlePrint} variant="outline" className="h-14 px-8 rounded-2xl border-[#E5E5E5] hover:bg-[#F5F5F5] gap-3 font-semibold transition-all">
+                        <Printer className="w-5 h-5 text-[#8B5E3C]" />
+                        Print Poster
                     </Button>
-                    <Button onClick={handleDownload} variant="outline" className="gap-2">
-                        <Download className="w-4 h-4" />
-                        Download
+                    <Button onClick={handleDownload} variant="outline" className="h-14 px-8 rounded-2xl border-[#E5E5E5] hover:bg-[#F5F5F5] gap-3 font-semibold transition-all">
+                        <Download className="w-5 h-5 text-[#8B5E3C]" />
+                        Save Image
                     </Button>
 
                     <Dialog open={emailOpen} onOpenChange={setEmailOpen}>
                         <DialogTrigger asChild>
-                            <Button variant="outline" className="gap-2">
-                                <Mail className="w-4 h-4" />
-                                Email
+                            <Button className="h-14 px-8 rounded-2xl bg-[#8B5E3C] hover:bg-[#704930] gap-3 font-bold shadow-lg shadow-[#8B5E3C]/20 transition-all">
+                                <Mail className="w-5 h-5" />
+                                Send to Guest
                             </Button>
                         </DialogTrigger>
-                        <DialogContent>
+                        <DialogContent className="sm:rounded-[32px] p-8 border-none shadow-2xl">
                             <DialogHeader>
-                                <DialogTitle>Send QR Code via Email</DialogTitle>
-                                <DialogDescription>Send the QR code image as an attachment.</DialogDescription>
+                                <DialogTitle className="text-2xl font-bold flex items-center gap-2">
+                                    <Mail className="w-6 h-6 text-[#8B5E3C]" />
+                                    Send via Email
+                                </DialogTitle>
+                                <DialogDescription className="text-base pt-1">
+                                    The QR code will be attached as a high-quality PNG.
+                                </DialogDescription>
                             </DialogHeader>
-                            <div className="space-y-4 py-4">
+                            <div className="space-y-5 py-6">
                                 <div className="space-y-2">
-                                    <Label>Recipient Email</Label>
+                                    <Label className="font-semibold">Recipient Email</Label>
                                     <Input
                                         type="email"
                                         placeholder="guest@example.com"
                                         value={emailTo}
                                         onChange={(e) => setEmailTo(e.target.value)}
+                                        className="h-12 rounded-xl focus-visible:ring-[#8B5E3C]"
                                     />
                                 </div>
                                 <div className="space-y-2">
-                                    <Label>Subject</Label>
+                                    <Label className="font-semibold">Subject</Label>
                                     <Input
                                         value={emailSubject}
                                         onChange={(e) => setEmailSubject(e.target.value)}
+                                        className="h-12 rounded-xl focus-visible:ring-[#8B5E3C]"
                                     />
                                 </div>
                             </div>
-                            <DialogFooter>
-                                <Button variant="outline" onClick={() => setEmailOpen(false)}>Cancel</Button>
-                                <Button onClick={handleSendEmail} disabled={emailSending || !emailTo}>
-                                    {emailSending ? "Sending..." : "Send Email"}
-                                </Button>
-                            </DialogFooter>
-                        </DialogContent>
-                    </Dialog>
-
-                    <Dialog open={smsOpen} onOpenChange={setSmsOpen}>
-                        <DialogTrigger asChild>
-                            <Button variant="outline" className="gap-2">
-                                <MessageSquare className="w-4 h-4" />
-                                SMS
-                            </Button>
-                        </DialogTrigger>
-                        <DialogContent>
-                            <DialogHeader>
-                                <DialogTitle>Send Link via SMS</DialogTitle>
-                                <DialogDescription>
-                                    Note: This will send the text URL via SMS. Images are not supported by the SMS gateway.
-                                </DialogDescription>
-                            </DialogHeader>
-                            <div className="space-y-4 py-4">
-                                <div className="space-y-2">
-                                    <Label>Phone Number</Label>
-                                    <Input
-                                        placeholder="0551234567"
-                                        value={smsTo}
-                                        onChange={(e) => setSmsTo(e.target.value)}
-                                    />
-                                </div>
-                            </div>
-                            <DialogFooter>
-                                <Button variant="outline" onClick={() => setSmsOpen(false)}>Cancel</Button>
-                                <Button onClick={handleSendSMS} disabled={smsSending || !smsTo}>
-                                    {smsSending ? "Sending..." : "Send SMS"}
+                            <DialogFooter className="gap-3">
+                                <Button variant="ghost" onClick={() => setEmailOpen(false)}>Cancel</Button>
+                                <Button onClick={handleSendEmail} disabled={emailSending || !emailTo} className="bg-[#8B5E3C] hover:bg-[#704930] h-12 px-8 rounded-xl font-bold text-white">
+                                    {emailSending ? <Loader2 className="w-5 h-5 animate-spin" /> : "Dispatch Email"}
                                 </Button>
                             </DialogFooter>
                         </DialogContent>
