@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { blink } from '@/blink/client'
+import { supabase } from '@/lib/supabase'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -9,7 +9,6 @@ import { toast } from 'sonner'
 import { activityLogService } from '@/services/activity-log-service'
 
 export function ContactPage() {
-  const db = (blink.db as any)
   const [formData, setFormData] = useState({
     name: '',
     email: '',
@@ -23,12 +22,13 @@ export function ContactPage() {
 
     try {
       const messageId = `msg-${Date.now()}`
-      await db.contactMessages.create({
+      await supabase.from('contact_messages').insert({
         id: messageId,
         name: formData.name,
         email: formData.email,
         message: formData.message,
-        status: 'unread'
+        status: 'unread',
+        created_at: new Date().toISOString(),
       })
 
       // Log the contact message creation

@@ -4,7 +4,7 @@ import { Input } from '../../components/ui/input'
 import { Label } from '../../components/ui/label'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '../../components/ui/dialog'
 import { Plus, Users, Mail, Phone, Search, MoreVertical, Pencil, Trash2 } from 'lucide-react'
-import { blink } from '../../blink/client'
+import { supabase } from '../../lib/supabase'
 import { activityLogService } from '@/services/activity-log-service'
 import { bookingEngine } from '../../services/booking-engine'
 import { toast } from 'sonner'
@@ -63,12 +63,33 @@ export function GuestsPage() {
   const loadGuests = async () => {
     try {
       // Fetch guests, bookings, rooms, and staff in parallel
-      const [guestsData, bookingsData, roomsData, staffData] = await Promise.all([
-        (blink.db as any).guests.list({ orderBy: { createdAt: 'desc' } }),
-        (blink.db as any).bookings.list(),
-        (blink.db as any).rooms.list(),
-        (blink.db as any).staff.list({ include: ['user'] })
+      const [guestsResult, bookingsResult, roomsResult, staffResult] = await Promise.all([
+        supabase.from('guests').select('*').order('created_at', { ascending: false }),
+        supabase.from('bookings').select('id, guest_id, room_id, check_in, check_out, status, total_price, source, created_at, created_by, created_by_name, check_in_by, check_in_by_name, check_out_by, check_out_by_name, special_requests'),
+        supabase.from('rooms').select('id, room_number'),
+        supabase.from('staff').select('id, user_id, name'),
       ])
+
+      const guestsData = (guestsResult.data || []).map((g: any) => ({
+        id: g.id, name: g.name, email: g.email, phone: g.phone,
+        address: g.address, country: g.country, notes: g.notes,
+        totalRevenue: g.total_revenue, lastBookingDate: g.last_booking_date,
+        lastRoomNumber: g.last_room_number, lastCheckIn: g.last_check_in,
+        lastCheckOut: g.last_check_out, lastSource: g.last_source,
+        lastCreatedByName: g.last_created_by_name, lastCheckInByName: g.last_check_in_by_name,
+        lastCheckOutByName: g.last_check_out_by_name,
+      }))
+      const bookingsData = (bookingsResult.data || []).map((b: any) => ({
+        id: b.id, guestId: b.guest_id, roomId: b.room_id,
+        checkIn: b.check_in, checkOut: b.check_out, status: b.status,
+        totalPrice: b.total_price, source: b.source, createdAt: b.created_at,
+        createdBy: b.created_by, createdByName: b.created_by_name,
+        checkInBy: b.check_in_by, checkInByName: b.check_in_by_name,
+        checkOutBy: b.check_out_by, checkOutByName: b.check_out_by_name,
+        specialRequests: b.special_requests,
+      }))
+      const roomsData = roomsResult.data || []
+      const staffData = (staffResult.data || []).map((s: any) => ({ userId: s.user_id, name: s.name }))
 
       // Map rooms for quick lookup
       const roomMap = new Map((roomsData || []).map((r: any) => [r.id, r.roomNumber]))
@@ -215,32 +236,39 @@ export function GuestsPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     try {
-      const user = await blink.auth.me()
+      const { data: { user } } = await supabase.auth.getUser()
+      const userId = user?.id || null
       if (editingId) {
         const oldGuest = guests.find(g => g.id === editingId)
-        await blink.db.guests.update(editingId, {
-          ...formData,
-          userId: user.id,
-          updatedAt: new Date().toISOString()
-        })
-        // Log activity
+        const { error } = await supabase.from('guests').update({
+          name: formData.name,
+          email: formData.email,
+          phone: formData.phone,
+          address: formData.address,
+          country: formData.country,
+          notes: formData.notes,
+          updated_at: new Date().toISOString()
+        }).eq('id', editingId)
+        if (error) throw error
         await activityLogService.logGuestUpdated(editingId, {
           name: { old: oldGuest?.name, new: formData.name },
           email: { old: oldGuest?.email, new: formData.email },
           phone: { old: oldGuest?.phone, new: formData.phone },
-        }, user.id).catch(err => console.error('Failed to log guest update:', err))
+        }, userId || undefined).catch(err => console.error('Failed to log guest update:', err))
         toast.success('Guest updated')
       } else {
-        const newGuestId = `guest_${Date.now()}`
-        await blink.db.guests.create({
-          id: newGuestId,
-          userId: user.id,
-          ...formData,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString()
-        })
-        // Log activity
-        await activityLogService.logGuestCreated(newGuestId, formData, user.id)
+        const { data: created, error } = await supabase.from('guests').insert({
+          name: formData.name,
+          email: formData.email,
+          phone: formData.phone,
+          address: formData.address,
+          country: formData.country,
+          notes: formData.notes,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        }).select().single()
+        if (error) throw error
+        await activityLogService.logGuestCreated(created.id, formData, userId || undefined)
           .catch(err => console.error('Failed to log guest creation:', err))
         toast.success('Guest added successfully')
       }
@@ -262,29 +290,32 @@ export function GuestsPage() {
     if (!deleteId) return
 
     try {
-      const user = await blink.auth.me()
+      const { data: { user } } = await supabase.auth.getUser()
+      const userId = user?.id || undefined
       const guest = guests.find(g => g.id === deleteId)
 
-      // 1. Delete associated bookings first (Cascade Delete)
-      const guestBookings = await blink.db.bookings.list({ where: { guestId: deleteId } })
+      // 1. Delete associated bookings first
+      const { data: guestBookings } = await supabase
+        .from('bookings')
+        .select('id')
+        .eq('guest_id', deleteId)
 
-      if (guestBookings.length > 0) {
+      if (guestBookings && guestBookings.length > 0) {
         toast.message(`Deleting ${guestBookings.length} associated booking(s)...`)
         for (const booking of guestBookings) {
           try {
             await bookingEngine.deleteBooking(booking.id)
           } catch (err) {
             console.error(`Failed to delete booking ${booking.id}:`, err)
-            // Continue deleting others even if one fails
           }
         }
       }
 
       // 2. Delete the guest
-      await blink.db.guests.delete(deleteId)
+      const { error } = await supabase.from('guests').delete().eq('id', deleteId)
+      if (error) throw error
 
-      // Log activity
-      await activityLogService.logGuestDeleted(deleteId, guest?.name || 'Unknown Guest', user.id)
+      await activityLogService.logGuestDeleted(deleteId, guest?.name || 'Unknown Guest', userId)
         .catch(err => console.error('Failed to log guest deletion:', err))
 
       toast.success('Guest and associated data deleted')

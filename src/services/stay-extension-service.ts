@@ -1,7 +1,74 @@
-import { blink } from '@/blink/client'
+import { supabase } from '@/lib/supabase'
 import { bookingChargesService } from './booking-charges-service'
 
-const db = blink.db as any
+function _toCC(obj: Record<string, any>) {
+    const m: Record<string, string> = {
+        guest_id: 'guestId', room_id: 'roomId', room_type_id: 'roomTypeId',
+        check_in: 'checkIn', check_out: 'checkOut', total_price: 'totalPrice',
+        base_price: 'basePrice', room_number: 'roomNumber', created_at: 'createdAt',
+    }
+    const out: Record<string, any> = {}
+    for (const [k, v] of Object.entries(obj)) out[m[k] || k] = v
+    return out
+}
+function _toSnake(obj: Record<string, any>) {
+    const m: Record<string, string> = {
+        guestId: 'guest_id', roomId: 'room_id', roomTypeId: 'room_type_id',
+        checkIn: 'check_in', checkOut: 'check_out', totalPrice: 'total_price',
+        basePrice: 'base_price', roomNumber: 'room_number',
+    }
+    const out: Record<string, any> = {}
+    for (const [k, v] of Object.entries(obj)) out[m[k] || k] = v
+    return out
+}
+
+const db = {
+    bookings: {
+        list: async (opts?: { where?: Record<string, any>; limit?: number }) => {
+            let q = supabase.from('bookings').select('*').limit(opts?.limit || 500)
+            if (opts?.where?.roomId) q = q.eq('room_id', opts.where.roomId)
+            const { data } = await q
+            return (data || []).map(_toCC)
+        },
+        get: async (id: string) => {
+            const { data } = await supabase.from('bookings').select('*').eq('id', id).maybeSingle()
+            return data ? _toCC(data) : null
+        },
+        update: async (id: string, payload: Record<string, any>) => {
+            await supabase.from('bookings').update(_toSnake(payload)).eq('id', id)
+        },
+    },
+    rooms: {
+        list: async (opts?: { limit?: number }) => {
+            const { data } = await supabase.from('rooms').select('*').limit(opts?.limit || 100)
+            return (data || []).map(_toCC)
+        },
+        get: async (id: string) => {
+            const { data } = await supabase.from('rooms').select('*').eq('id', id).maybeSingle()
+            return data ? _toCC(data) : null
+        },
+    },
+    roomTypes: {
+        get: async (id: string) => {
+            const { data } = await supabase.from('room_types').select('*').eq('id', id).maybeSingle()
+            return data ? _toCC(data) : null
+        },
+    },
+    guests: {
+        list: async (opts?: { where?: Record<string, any>; limit?: number }) => {
+            let q = supabase.from('guests').select('*').limit(opts?.limit || 500)
+            if (opts?.where?.id?.in) q = q.in('id', opts.where.id.in)
+            const { data } = await q
+            return data || []
+        },
+    },
+    properties: {
+        list: async (opts?: { limit?: number }) => {
+            const { data } = await supabase.from('rooms').select('*').limit(opts?.limit || 100)
+            return (data || []).map((r: any) => _toCC(r))
+        },
+    },
+}
 
 export interface ExtensionResult {
     success: boolean

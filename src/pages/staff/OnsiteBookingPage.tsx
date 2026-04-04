@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { blink } from '@/blink/client'
+import { supabase } from '@/lib/supabase'
 import { RoomType, Room } from '@/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -20,7 +20,7 @@ import { sendBookingConfirmationSMS } from '@/services/sms-service'
 import { activityLogService } from '@/services/activity-log-service'
 
 export function OnsiteBookingPage() {
-  const db = (blink.db as any)
+  // (db shim removed)
   const { currency } = useCurrency()
   const navigate = useNavigate()
   const [user, setUser] = useState<any>(null)
@@ -70,13 +70,15 @@ export function OnsiteBookingPage() {
   const [discountValue, setDiscountValue] = useState<number>(0)
 
   useEffect(() => {
-    const unsubscribe = blink.auth.onAuthStateChanged((state) => {
-      setUser(state.user)
-      if (!state.user && !state.isLoading) {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null)
+      if (!session?.user) {
         navigate('/staff')
       }
     })
-    return unsubscribe
+    // Load initial user
+    supabase.auth.getUser().then(({ data: { user } }) => setUser(user))
+    return () => subscription.unsubscribe()
   }, [navigate])
 
   useEffect(() => {
@@ -87,28 +89,28 @@ export function OnsiteBookingPage() {
 
   const loadData = async () => {
     try {
-      const [typesData, roomsData, propertiesData, bookingsData] = await Promise.all([
-        db.roomTypes.list(),
-        db.rooms.list(),
-        db.properties.list({ orderBy: { createdAt: 'desc' } }),
+      const [typesResult, roomsResult, bookingsData] = await Promise.all([
+        supabase.from('room_types').select('id, name, base_price, capacity'),
+        supabase.from('rooms').select('id, room_number, status, room_type_id, price').eq('status', 'available'),
         bookingEngine.getAllBookings()
       ])
+      const typesData: RoomType[] = (typesResult.data || []).map((rt: any) => ({ id: rt.id, name: rt.name, basePrice: rt.base_price, capacity: rt.capacity }))
+      const roomsData = (roomsResult.data || []).map((r: any) => ({ id: r.id, roomNumber: r.room_number, status: r.status, roomTypeId: r.room_type_id, price: r.price }))
       const normalize = (s: string) => (s || '').toLowerCase().replace(/\s+/g, ' ').trim()
-      const filteredTypes = (typesData as RoomType[]).filter((t: any) => {
+      const filteredTypes = typesData.filter((t: any) => {
         const n = normalize(t.name)
         return n && n.length > 0
       })
 
-      // Process properties data to match room types
-      const propertiesWithPrices = propertiesData.map((prop: any) => {
-        const matchingType =
-          filteredTypes.find((rt) => rt.id === prop.propertyTypeId) ||
-          filteredTypes.find((rt) => (rt.name || '').toLowerCase() === (prop.propertyType || '').toLowerCase())
-        // Ensure we check both basePrice (from wrapper) and base_price (fallback)
-        const resolvedPrice = Number(matchingType?.basePrice || (matchingType as any)?.base_price) || Number(prop.basePrice || prop.base_price) || Number(prop.price) || 0
+      // Process rooms data to match room types (rooms table is source of truth)
+      const propertiesWithPrices = roomsData.map((prop: any) => {
+        const matchingType = filteredTypes.find((rt) => rt.id === prop.roomTypeId)
+        const resolvedPrice = Number(matchingType?.basePrice) || Number(prop.price) || 0
         return {
           ...prop,
-          roomTypeName: matchingType?.name || prop.propertyType || '',
+          propertyTypeId: prop.roomTypeId,
+          roomNumber: prop.roomNumber,
+          roomTypeName: matchingType?.name || '',
           displayPrice: resolvedPrice
         }
       })

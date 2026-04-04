@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Loader2, Check, X, Star, Trash2, MessageSquare } from 'lucide-react'
-import { blink } from '@/blink/client'
+import { supabase } from '@/lib/supabase'
 import { toast } from '@/hooks/use-toast'
 import { Badge } from '@/components/ui/badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -43,36 +43,29 @@ export function ReviewsPage() {
             setIsLoading(true)
             console.log('🔄 [ReviewsPage] Loading reviews...')
 
-            const reviewsList = await blink.db.reviews.list({
-                orderBy: { createdAt: 'desc' }
-            })
+            const { data: reviewsList, error: reviewsErr } = await supabase
+                .from('reviews')
+                .select('*')
+                .order('created_at', { ascending: false })
+            if (reviewsErr) throw reviewsErr
 
-            setReviews(reviewsList as Review[])
+            const mapped = (reviewsList || []).map((r: any) => ({
+                ...r, guestId: r.guest_id, isFeatured: r.is_featured, guestName: r.guest_name, createdAt: r.created_at
+            }))
+            setReviews(mapped as Review[])
 
-            // Load associated guests (fallback for old reviews without guest_name)
-            if (reviewsList.length > 0) {
-                const guestIds = Array.from(new Set(
-                    reviewsList
-                        .filter((r: any) => !r.guest_name && r.guestId) // Only need to fetch if guest_name is missing
-                        .map((r: any) => r.guestId)
-                )).filter(Boolean)
-                if (guestIds.length > 0) {
-                    // Fetch guests in batches or one by one if wrapper doesn't support 'in' with array properly or if list is short
-                    // The wrapper supports 'in' operator: query.in(snakeKey, value.in)
-                    try {
-                        // @ts-ignore
-                        const guestsList = await blink.db.guests.list({
-                            where: { id: { in: guestIds } }
-                        })
-
-                        const guestsMap: Record<string, Guest> = {}
-                        guestsList.forEach((g: any) => {
-                            guestsMap[g.id] = g
-                        })
-                        setGuests(guestsMap)
-                    } catch (e) {
-                        console.error('Failed to load guests for reviews:', e)
-                    }
+            // Load associated guests for reviews missing guest_name
+            const guestIds = Array.from(new Set(
+                mapped.filter((r: any) => !r.guest_name && r.guestId).map((r: any) => r.guestId)
+            )).filter(Boolean) as string[]
+            if (guestIds.length > 0) {
+                try {
+                    const { data: guestsList } = await supabase.from('guests').select('id, name').in('id', guestIds)
+                    const guestsMap: Record<string, Guest> = {}
+                    ;(guestsList || []).forEach((g: any) => { guestsMap[g.id] = g })
+                    setGuests(guestsMap)
+                } catch (e) {
+                    console.error('Failed to load guests for reviews:', e)
                 }
             }
 
@@ -86,7 +79,7 @@ export function ReviewsPage() {
 
     const handleStatusChange = async (reviewId: string, newStatus: 'approved' | 'rejected') => {
         try {
-            await blink.db.reviews.update(reviewId, { status: newStatus })
+            await supabase.from('reviews').update({ status: newStatus }).eq('id', reviewId)
 
             setReviews(prev => prev.map(r =>
                 r.id === reviewId ? { ...r, status: newStatus } : r
@@ -108,7 +101,7 @@ export function ReviewsPage() {
     const handleToggleFeature = async (review: Review) => {
         try {
             const newFeatured = !review.isFeatured
-            await blink.db.reviews.update(review.id, { isFeatured: newFeatured })
+            await supabase.from('reviews').update({ is_featured: newFeatured }).eq('id', review.id)
 
             setReviews(prev => prev.map(r =>
                 r.id === review.id ? { ...r, isFeatured: newFeatured } : r

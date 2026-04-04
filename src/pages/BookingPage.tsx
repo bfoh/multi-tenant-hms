@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useSearchParams, useNavigate } from 'react-router-dom'
-import { blink } from '@/blink/client'
+import { supabase } from '@/lib/supabase'
 import { RoomType, Room } from '@/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -19,7 +19,6 @@ import { bookingEngine } from '@/services/booking-engine'
 import { OfflineStatusBanner } from '@/components/OfflineStatusBanner'
 
 export function BookingPage() {
-  const db = (blink.db as any)
   const { currency } = useCurrency()
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
@@ -80,12 +79,14 @@ export function BookingPage() {
 
   const loadData = async () => {
     try {
-      const [typesData, roomsData, propertiesData, bookingsData] = await Promise.all([
-        db.roomTypes.list(),
-        db.rooms.list(),
-        db.properties.list({ orderBy: { createdAt: 'desc' } }),
+      const [rtRaw, roomsRaw, bookingsData] = await Promise.all([
+        supabase.from('room_types').select('*'),
+        supabase.from('rooms').select('*').order('created_at', { ascending: false }),
         bookingEngine.getAllBookings()
       ])
+      const typesData = (rtRaw.data || []).map((r: any) => ({ ...r, basePrice: r.base_price, imageUrl: r.image_url }))
+      const roomsData = (roomsRaw.data || []).map((r: any) => ({ ...r, roomNumber: r.room_number, roomTypeId: r.room_type_id }))
+      const propertiesData = roomsData.map((r: any) => ({ ...r, propertyTypeId: r.roomTypeId, status: r.status === 'available' ? 'active' : r.status }))
       const normalize = (s: string) => (s || '').toLowerCase().replace(/\s+/g, ' ').trim()
       const filteredTypes = (typesData as RoomType[]).filter(t => {
         const n = normalize((t as any).name)

@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious } from '@/components/ui/carousel'
 import { Star, User } from 'lucide-react'
-import { blink } from '@/blink/client'
+import { supabase } from '@/lib/supabase'
 import { formatDistanceToNow } from 'date-fns'
 
 interface Review {
@@ -32,19 +32,31 @@ export function ReviewsCarousel() {
         const loadReviews = async () => {
             try {
                 // Fetch approved reviews
-                const allReviews = await blink.db.reviews.list({
-                    where: { status: 'approved' },
-                    orderBy: { createdAt: 'desc' },
-                    limit: 10
-                })
+                const { data: rawReviews } = await supabase
+                    .from('reviews')
+                    .select('*')
+                    .eq('status', 'approved')
+                    .order('created_at', { ascending: false })
+                    .limit(10)
 
-                if (!allReviews || allReviews.length === 0) {
+                const allReviews: Review[] = (rawReviews || []).map((r: any) => ({
+                    id: r.id,
+                    guestId: r.guest_id || '',
+                    guest_name: r.guest_name || null,
+                    rating: r.rating,
+                    comment: r.comment,
+                    createdAt: r.created_at,
+                    isFeatured: r.is_featured || false,
+                    status: r.status,
+                }))
+
+                if (allReviews.length === 0) {
                     setReviews([])
                     setLoading(false)
                     return
                 }
 
-                const sorted = (allReviews as Review[]).sort((a, b) => {
+                const sorted = allReviews.sort((a, b) => {
                     if (a.isFeatured === b.isFeatured) {
                         return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
                     }
@@ -62,12 +74,12 @@ export function ReviewsCarousel() {
                 ))
 
                 if (guestIds.length > 0) {
-                    // @ts-ignore
-                    const guestList = await blink.db.guests.list({
-                        where: { id: { in: guestIds } }
-                    })
+                    const { data: guestList } = await supabase
+                        .from('guests')
+                        .select('id, name')
+                        .in('id', guestIds)
                     const guestMap: Record<string, Guest> = {}
-                    guestList.forEach((g: any) => {
+                    ;(guestList || []).forEach((g: any) => {
                         guestMap[g.id] = g
                     })
                     setGuests(guestMap)

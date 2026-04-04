@@ -1,4 +1,4 @@
-import { blink } from '@/blink/client'
+import { supabase } from '@/lib/supabase'
 
 /**
  * Activity types that can be logged
@@ -191,8 +191,6 @@ class ActivityLogService {
   public async log(data: ActivityLogData): Promise<void> {
     // Wrap entire function in try-catch to ensure logging never blocks operations
     try {
-      const db = blink.db as any
-
       // Use provided userId or fall back to current user
       const userId = data.userId || this.currentUserId || 'system'
 
@@ -200,7 +198,7 @@ class ActivityLogService {
       let userEmail = userId
       if (userId !== 'system' && userId !== 'guest') {
         try {
-          const user = await blink.auth.me()
+          const { data: { user } } = await supabase.auth.getUser()
           userEmail = user?.email || userId
         } catch (error) {
           console.warn('[ActivityLog] Failed to get user email, using userId:', error)
@@ -228,51 +226,23 @@ class ActivityLogService {
         return
       }
 
-      // Try to use activityLogs table first
-      try {
-        const activityLogEntry = {
-          id: logEntry.id,
-          action: logEntry.action,
-          entityType: logEntry.entityType,
-          entityId: logEntry.entityId,
-          details: logEntry.details,
-          userId,
-          metadata: logEntry.metadata,
-          createdAt: logEntry.createdAt,
-        }
+      // Insert directly into activity_logs via Supabase
+      const { error: logError } = await supabase.from('activity_logs').insert({
+        id: logEntry.id,
+        action: logEntry.action,
+        entity_type: logEntry.entityType,
+        entity_id: logEntry.entityId,
+        details: logEntry.details,
+        user_id: userId,
+        metadata: logEntry.metadata,
+        created_at: logEntry.createdAt,
+      })
 
-        await db.activityLogs.create(activityLogEntry)
-        console.log('[ActivityLog] Activity logged successfully to activityLogs table')
-        return
-      } catch (activityLogsError: any) {
-        console.warn('[ActivityLog] activityLogs table failed, trying fallback:', activityLogsError.message)
-
-        // Fallback: Try contactMessages table with activity_log status
-        try {
-          const fallbackEntry = {
-            id: logEntry.id,
-            name: `${data.action} ${data.entityType} - ${data.entityId}`,
-            email: userEmail,
-            message: JSON.stringify({
-              action: logEntry.action,
-              entityType: logEntry.entityType,
-              entityId: logEntry.entityId,
-              details: JSON.parse(logEntry.details),
-              userId: userEmail,
-              metadata: JSON.parse(logEntry.metadata)
-            }),
-            status: 'activity_log',
-            createdAt: logEntry.createdAt,
-          }
-
-          await db.contactMessages.create(fallbackEntry)
-          console.log('[ActivityLog] Activity logged successfully to contactMessages table (fallback)')
-        } catch (fallbackError: any) {
-          // Both methods failed - log to console only, don't propagate
-          console.warn('[ActivityLog] Fallback also failed, activity not persisted:', fallbackError.message)
-          // Store locally for potential future retry
-          this.pendingLogs.push(data)
-        }
+      if (logError) {
+        console.warn('[ActivityLog] Failed to insert activity log:', logError.message)
+        this.pendingLogs.push(data)
+      } else {
+        console.log('[ActivityLog] Activity logged successfully')
       }
     } catch (error) {
       // Catch-all to ensure we never throw from this method
@@ -605,7 +575,7 @@ class ActivityLogService {
 
     if (!userDetails?.email) {
       try {
-        const user = await blink.auth.me()
+        const { data: { user } } = await supabase.auth.getUser()
         userEmail = user?.email || 'Unknown User'
       } catch (error) {
         console.warn('[ActivityLog] Failed to get user email for logout, using userId:', error)
@@ -665,138 +635,36 @@ class ActivityLogService {
     offset?: number
   }): Promise<ActivityLog[]> {
     try {
-      const db = blink.db as any
+      let query = supabase
+        .from('activity_logs')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(options?.limit || 100)
 
-      // Try to get logs from activityLogs table first
-      try {
-        const logs = await db.activityLogs.list({
-          orderBy: { createdAt: 'desc' },
-          limit: options?.limit || 100,
-          offset: options?.offset || 0,
-        })
+      if (options?.offset) query = query.range(options.offset, options.offset + (options.limit || 100) - 1)
+      if (options?.entityType) query = query.eq('entity_type', options.entityType)
+      if (options?.entityId) query = query.eq('entity_id', options.entityId)
+      if (options?.userId) query = query.eq('user_id', options.userId)
+      if (options?.action) query = query.eq('action', options.action)
+      if (options?.startDate) query = query.gte('created_at', options.startDate.toISOString())
+      if (options?.endDate) query = query.lte('created_at', options.endDate.toISOString())
 
-        // Apply filters
-        let filteredLogs = logs
+      const { data, error } = await query
+      if (error) throw error
 
-        if (options?.userId) {
-          filteredLogs = filteredLogs.filter((log: any) => log.userId === options.userId)
-        }
+      const parsedLogs = (data || []).map((row: any) => ({
+        id: row.id,
+        action: row.action,
+        entityType: row.entity_type,
+        entityId: row.entity_id,
+        details: typeof row.details === 'string' ? JSON.parse(row.details) : row.details,
+        userId: row.user_id,
+        metadata: typeof row.metadata === 'string' ? JSON.parse(row.metadata) : row.metadata,
+        createdAt: row.created_at,
+      }))
 
-        if (options?.entityType) {
-          filteredLogs = filteredLogs.filter((log: any) => log.entityType === options.entityType)
-        }
-
-        if (options?.entityId) {
-          filteredLogs = filteredLogs.filter((log: any) => log.entityId === options.entityId)
-        }
-
-        if (options?.action) {
-          filteredLogs = filteredLogs.filter((log: any) => log.action === options.action)
-        }
-
-        // Filter by date range if provided
-        if (options?.startDate || options?.endDate) {
-          filteredLogs = filteredLogs.filter((log: any) => {
-            const logDate = new Date(log.createdAt)
-            if (options.startDate && logDate < options.startDate) return false
-            if (options.endDate && logDate > options.endDate) return false
-            return true
-          })
-        }
-
-        // Parse details and metadata if they're strings
-        const parsedLogs = filteredLogs.map((log: any) => ({
-          id: log.id,
-          action: log.action,
-          entityType: log.entityType,
-          entityId: log.entityId,
-          details: typeof log.details === 'string' ? JSON.parse(log.details) : log.details,
-          userId: log.userId,
-          metadata: typeof log.metadata === 'string' ? JSON.parse(log.metadata) : log.metadata,
-          createdAt: log.createdAt,
-        }))
-
-        console.log('[ActivityLog] Retrieved logs from activityLogs table:', parsedLogs.length)
-        return parsedLogs
-      } catch (activityLogsError: any) {
-        console.warn('[ActivityLog] activityLogs table failed, using fallback:', activityLogsError.message)
-
-        // Fallback: Get logs from contactMessages table
-        const messages = await db.contactMessages.list({
-          orderBy: { createdAt: 'desc' },
-          limit: (options?.limit || 100) * 2, // Get more to filter
-          offset: options?.offset || 0,
-        })
-
-        // Filter for activity logs (status = 'activity_log')
-        let activityLogs = messages.filter((msg: any) => msg.status === 'activity_log')
-
-        // Apply filters
-        if (options?.userId) {
-          activityLogs = activityLogs.filter((msg: any) => msg.email === options.userId)
-        }
-
-        // Filter by date range if provided
-        if (options?.startDate || options?.endDate) {
-          activityLogs = activityLogs.filter((msg: any) => {
-            const logDate = new Date(msg.createdAt)
-            if (options.startDate && logDate < options.startDate) return false
-            if (options.endDate && logDate > options.endDate) return false
-            return true
-          })
-        }
-
-        // Parse message data and apply additional filters
-        const parsedLogs = activityLogs.map((msg: any) => {
-          try {
-            const messageData = JSON.parse(msg.message)
-            return {
-              id: msg.id,
-              action: messageData.action,
-              entityType: messageData.entityType,
-              entityId: messageData.entityId,
-              details: messageData.details,
-              userId: messageData.userId || msg.email, // Use userId from message data, fallback to email
-              metadata: messageData.metadata || {},
-              createdAt: msg.createdAt,
-              messageData // Keep for filtering
-            }
-          } catch (error) {
-            console.error('[ActivityLog] Failed to parse message data:', error)
-            return null
-          }
-        }).filter(Boolean)
-
-        // Apply remaining filters
-        let filteredLogs = parsedLogs
-        if (options?.entityType) {
-          filteredLogs = filteredLogs.filter((log: any) => log.entityType === options.entityType)
-        }
-        if (options?.entityId) {
-          filteredLogs = filteredLogs.filter((log: any) => log.entityId === options.entityId)
-        }
-        if (options?.action) {
-          filteredLogs = filteredLogs.filter((log: any) => log.action === options.action)
-        }
-
-        // Limit the final results
-        filteredLogs = filteredLogs.slice(0, options?.limit || 100)
-
-        // Remove the temporary messageData field
-        const finalLogs = filteredLogs.map((log: any) => ({
-          id: log.id,
-          action: log.action,
-          entityType: log.entityType,
-          entityId: log.entityId,
-          details: log.details,
-          userId: log.userId,
-          metadata: log.metadata,
-          createdAt: log.createdAt,
-        }))
-
-        console.log('[ActivityLog] Retrieved logs from contactMessages table (fallback):', finalLogs.length)
-        return finalLogs
-      }
+      console.log('[ActivityLog] Retrieved logs:', parsedLogs.length)
+      return parsedLogs
     } catch (error) {
       console.error('[ActivityLog] Failed to fetch activity logs:', error)
       return []
@@ -854,25 +722,17 @@ class ActivityLogService {
    */
   public async deleteOldLogs(daysToKeep: number = 365): Promise<number> {
     try {
-      const db = blink.db as any
       const cutoffDate = new Date()
       cutoffDate.setDate(cutoffDate.getDate() - daysToKeep)
 
-      const oldLogs = await this.getActivityLogs({
-        endDate: cutoffDate,
-        limit: 10000,
-      })
+      const { error, count } = await supabase
+        .from('activity_logs')
+        .delete({ count: 'exact' })
+        .lt('created_at', cutoffDate.toISOString())
 
-      let deletedCount = 0
-      for (const log of oldLogs) {
-        try {
-          await db.activityLogs.delete(log.id)
-          deletedCount++
-        } catch (error) {
-          console.error('[ActivityLog] Failed to delete log:', log.id, error)
-        }
-      }
+      if (error) throw error
 
+      const deletedCount = count || 0
       console.log(`[ActivityLog] Deleted ${deletedCount} old activity logs`)
       return deletedCount
     } catch (error) {

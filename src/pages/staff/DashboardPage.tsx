@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Building2, Calendar, Users, DollarSign, TrendingUp, Clock, BarChart2 } from 'lucide-react'
-import { blink } from '../../blink/client'
+import { supabase } from '../../lib/supabase'
 import { bookingEngine } from '../../services/booking-engine'
 import { formatCurrencySync } from '../../lib/utils'
 import { useCurrency } from '../../hooks/use-currency'
@@ -50,13 +50,27 @@ export function DashboardPage() {
 
   const loadDashboardData = async () => {
     try {
-      // Fetch data - load ALL properties (project-scoped, no user filtering needed)
-      const [allBookings, properties, guests, roomTypes] = await Promise.all([
+      // Fetch data in parallel
+      const [allBookings, roomsResult, guestsResult, roomTypesResult] = await Promise.all([
         bookingEngine.getAllBookings(),
-        blink.db.properties.list(),
-        blink.db.guests.list(),
-        (blink.db as any).roomTypes.list()
+        supabase.from('rooms').select('id, room_number, status, room_type_id, price').order('room_number'),
+        supabase.from('guests').select('id'),
+        supabase.from('room_types').select('id, name, base_price'),
       ])
+
+      const properties = (roomsResult.data || []).map((r: any) => ({
+        id: r.id,
+        roomNumber: r.room_number,
+        status: r.status,
+        propertyTypeId: r.room_type_id,
+        basePrice: r.price,
+      }))
+      const guests = guestsResult.data || []
+      const roomTypes = (roomTypesResult.data || []).map((rt: any) => ({
+        id: rt.id,
+        name: rt.name,
+        basePrice: rt.base_price,
+      }))
 
       const todayIso = new Date().toISOString().split('T')[0]
 

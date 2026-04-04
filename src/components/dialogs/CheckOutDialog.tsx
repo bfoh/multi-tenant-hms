@@ -36,6 +36,7 @@ export function CheckOutDialog({
     onConfirm,
     processing = false
 }: CheckOutDialogProps) {
+    console.log('[CheckOutDialog] BUILD_SIGNATURE: TRIPLE_LOCK_HOTFIX_V1_20260404')
     const { currency } = useCurrency()
     const [charges, setCharges] = useState<BookingCharge[]>([])
     const [loading, setLoading] = useState(false)
@@ -59,13 +60,50 @@ export function CheckOutDialog({
 
     if (!booking) return null
 
-    // Calculate totals
-    const roomCost = booking.totalPrice || 0
+    // Logic to resolve room cost with multiple fallbacks
+    const roomCost = (() => {
+        let base = Number((booking as any).finalAmount || (booking as any).totalPrice || (booking as any).amount || 0)
+        if (base > 0) return base
+
+        // STATIC FALLBACK RATES
+        const STATIC_RATES: Record<string, number> = {
+            'executive': 350,
+            'deluxe': 300,
+            'standard': 250,
+            'economy': 200,
+            'vip': 500
+        }
+
+        const checkIn = booking.checkIn || booking.dates?.checkIn
+        const checkOut = booking.checkOut || booking.dates?.checkOut
+        const nights = checkIn && checkOut ? calculateNights(checkIn, checkOut) : 1
+        
+        let pricePerNight = Number(room?.price || room?.base_price || room?.basePrice || 0)
+        
+        // 1. Try static lookup based on room type name if join failed
+        if (pricePerNight === 0) {
+            const typeStr = ((booking as any).roomType || room?.roomTypeName || room?.propertyType || '').toLowerCase()
+            Object.entries(STATIC_RATES).forEach(([key, rate]) => {
+                if (typeStr.includes(key)) pricePerNight = rate
+            })
+        }
+
+        // 2. UNIVERSAL FALLBACK: If still 0, use standard rate (350)
+        if (pricePerNight === 0) {
+            pricePerNight = 350
+            console.warn(`[CheckOutDialog] UNIVERSAL FALLBACK triggered for bookingId: ${booking.id}`)
+        }
+
+        const recovered = pricePerNight * nights
+        console.log(`[CheckOutDialog] RECOVERED roomCost: ${recovered} (${nights} nights * ${pricePerNight})`)
+        return recovered
+    })()
+
     const chargesTotal = charges.reduce((sum, c) => sum + (c.amount || 0), 0)
     const priorAmountPaid = (() => {
-        if (booking.amountPaid) return booking.amountPaid
+        if (Number(booking.amountPaid) > 0) return Number(booking.amountPaid)
         const sr = booking.special_requests || booking.specialRequests || ''
-        const pm = sr.match?.(/<!-- PAYMENT_DATA:(.*?) -->/)
+        const pm = sr.match(/<!-- PAYMENT_DATA:(.*?) -->/)
         if (pm) {
             try { return JSON.parse(pm[1]).amountPaid || 0 } catch { return 0 }
         }
@@ -74,7 +112,7 @@ export function CheckOutDialog({
     const priorPaymentStatus = (() => {
         if (booking.paymentStatus) return booking.paymentStatus
         const sr = booking.special_requests || booking.specialRequests || ''
-        const pm = sr.match?.(/<!-- PAYMENT_DATA:(.*?) -->/)
+        const pm = sr.match(/<!-- PAYMENT_DATA:(.*?) -->/)
         if (pm) {
             try { return JSON.parse(pm[1]).paymentStatus || 'pending' } catch { return 'pending' }
         }

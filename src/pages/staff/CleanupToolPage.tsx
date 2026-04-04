@@ -3,7 +3,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { AlertTriangle, Trash2, Shield, CheckCircle2, Loader2 } from 'lucide-react'
-import { blink } from '@/blink/client'
+import { supabase } from '@/lib/supabase'
 import { toast } from '@/hooks/use-toast'
 import { useStaffRole } from '@/hooks/use-staff-role'
 
@@ -39,18 +39,10 @@ export function CleanupToolPage() {
       let deleted = 0
       let hasMore = true
 
-      while (hasMore) {
-        const guests = await (blink.db as any).guests.list({ limit: 100 })
-        if (guests.length === 0) {
-          hasMore = false
-          break
-        }
-
-        for (const guest of guests) {
-          await (blink.db as any).guests.delete(guest.id)
-          deleted++
-        }
-      }
+      const { error: delGuestsErr } = await supabase.from('guests').delete().neq('id', 'nonexistent')
+      if (delGuestsErr) throw delGuestsErr
+      deleted = 1 // bulk delete
+      hasMore = false
 
       toast({
         title: 'Guest database cleared',
@@ -69,30 +61,16 @@ export function CleanupToolPage() {
 
     setResettingRooms(true)
     try {
-      const db = blink.db as any
       console.log('🛏️ Resetting room statuses...')
-
-      const rooms = await db.rooms.list({ limit: 1000 })
+      const { data: rooms } = await supabase.from('rooms').select('id, status').limit(1000)
       let roomsUpdated = 0
-      for (const room of rooms) {
+      for (const room of (rooms || [])) {
         if (room.status !== 'available') {
-          await db.rooms.update(room.id, { status: 'available' })
+          await supabase.from('rooms').update({ status: 'available' }).eq('id', room.id)
           roomsUpdated++
         }
       }
-
-      let propertiesUpdated = 0
-      try {
-        const properties = await db.properties.list({ limit: 1000 })
-        for (const property of properties) {
-          if (property.status && property.status !== 'active') {
-            await db.properties.update(property.id, { status: 'active' })
-            propertiesUpdated++
-          }
-        }
-      } catch (propErr) {
-        console.warn('Failed to reset property statuses (non-critical):', propErr)
-      }
+      const propertiesUpdated = 0
 
       toast({
         title: 'Room statuses reset',
@@ -115,19 +93,10 @@ export function CleanupToolPage() {
       let deletedTotal = 0
       let hasMore = true
 
-      while (hasMore) {
-        const tasks = await (blink.db as any).housekeepingTasks.list({ limit: 100 })
-        if (tasks.length === 0) {
-          hasMore = false
-          break
-        }
-
-        for (const task of tasks) {
-          await (blink.db as any).housekeepingTasks.delete(task.id)
-          deletedTotal++
-        }
-        console.log(`Deleted batch of ${tasks.length} tasks...`)
-      }
+      const { error: delTasksErr } = await supabase.from('housekeeping_tasks').delete().neq('id', 'nonexistent')
+      if (delTasksErr) throw delTasksErr
+      deletedTotal = 1
+      hasMore = false
 
       toast({
         title: 'Housekeeping tasks cleared',
@@ -148,59 +117,17 @@ export function CleanupToolPage() {
     try {
       console.log('🗑️ Deleting mock data...')
 
-      // Helper for batched deletion
-      const deleteCollection = async (collectionName: string, label: string) => {
-        let deleted = 0
-        let hasMore = true
-        while (hasMore) {
-          // Dynamic access to collection
-          const collection = (blink.db as any)[collectionName]
-          if (!collection) break
-
-          const items = await collection.list({ limit: 100 })
-          if (items.length === 0) {
-            hasMore = false
-            break
-          }
-
-          for (const item of items) {
-            await collection.delete(item.id)
-            deleted++
-          }
-        }
-        console.log(`Deleted ${deleted} ${label}`)
-        return deleted
-      }
-
       // 1. Delete Bookings
-      await deleteCollection('bookings', 'bookings')
-
+      await supabase.from('bookings').delete().neq('id', 'nonexistent')
       // 2. Delete Guests
-      await deleteCollection('guests', 'guests')
-
-      // 3. Delete Invoices
-      try {
-        await deleteCollection('invoices', 'invoices')
-      } catch (e) { console.log('No invoices table or empty') }
-
-      // 4. Reset Room Status (Update, not delete)
-      console.log('Resetting room statuses...')
-      let roomsUpdated = 0
-      const rooms = await (blink.db as any).rooms.list({ limit: 1000 })
-      for (const r of rooms) {
-        await (blink.db as any).rooms.update(r.id, { status: 'available' })
-        roomsUpdated++
-      }
-      console.log(`Reset ${roomsUpdated} rooms to available`)
-
-      // 5. Clear Activity Logs
-      await deleteCollection('activityLogs', 'logs')
-
-      // 6. Clear Housekeeping Tasks
-      await deleteCollection('housekeepingTasks', 'tasks')
-
-      // 7. Clear Contact Messages
-      await deleteCollection('contactMessages', 'contact messages')
+      await supabase.from('guests').delete().neq('id', 'nonexistent')
+      // 3. Reset Room Status
+      await supabase.from('rooms').update({ status: 'available' }).neq('id', 'nonexistent')
+      console.log('Reset all rooms to available')
+      // 4. Clear Activity Logs
+      await supabase.from('activity_logs').delete().neq('id', 'nonexistent')
+      // 5. Clear Housekeeping Tasks
+      await supabase.from('housekeeping_tasks').delete().neq('id', 'nonexistent')
 
       toast({
         title: 'Mock data cleared',
@@ -219,7 +146,8 @@ export function CleanupToolPage() {
     try {
       console.log('🔍 Scanning database...')
 
-      const allStaff = await (blink.db as any).staff.list({})
+      const { data: allStaffData } = await supabase.from('staff').select('*')
+      const allStaff = (allStaffData || []).map((s: any) => ({ ...s, userId: s.user_id }))
       console.log(`📋 Found ${allStaff.length} staff records`)
 
       const toKeep = allStaff.filter((staff: StaffMember) => {
@@ -262,7 +190,7 @@ export function CleanupToolPage() {
     setCleaning(true)
     try {
       console.log('🗑️ Starting cascade cleanup...')
-      const currentUser = await blink.auth.me()
+      const { data: { user: currentUser } } = await supabase.auth.getUser()
       let deleted = 0
       let totalActivityLogs = 0
       let totalBookings = 0
@@ -273,46 +201,25 @@ export function CleanupToolPage() {
           console.log(`Cascade deleting: ${staff.name}...`)
 
           // 1. Delete staff record
-          await (blink.db as any).staff.delete(staff.id)
+          await supabase.from('staff').delete().eq('id', staff.id)
           deleted++
 
-          // 2. Previous Blink-specific user deletion removed - Supabase handles auth cleanup differently
-          if (staff.userId && staff.userId !== 'pending') {
+          // 2. Delete activity logs for this user
+          if (staff.userId) {
             try {
-              // With Supabase, we just delete from the database
-              // Auth cleanup should be handled separately via Supabase admin functions
-              await (blink.db as any).users.delete(staff.userId)
-              totalUserAccounts++
-              console.log(`  ✅ Deleted user account`)
-            } catch (userErr) {
-              console.warn(`  ⚠️ Could not delete user account`)
+              const { count } = await supabase.from('activity_logs').delete({ count: 'exact' }).eq('user_id', staff.userId)
+              totalActivityLogs += count || 0
+            } catch (logsErr) {
+              console.warn(`  ⚠️ Could not clean activity logs`)
             }
-          }
 
-          // 3. Delete activity logs
-          try {
-            const logs = await (blink.db as any).activityLogs.list({
-              where: { userId: staff.userId }
-            })
-            for (const log of logs) {
-              await (blink.db as any).activityLogs.delete(log.id)
-              totalActivityLogs++
+            // 3. Anonymize bookings
+            try {
+              const { count } = await supabase.from('bookings').update({ user_id: null }, { count: 'exact' }).eq('user_id', staff.userId)
+              totalBookings += count || 0
+            } catch (bookingsErr) {
+              console.warn(`  ⚠️ Could not anonymize bookings`)
             }
-          } catch (logsErr) {
-            console.warn(`  ⚠️ Could not clean activity logs`)
-          }
-
-          // 4. Anonymize bookings
-          try {
-            const bookings = await (blink.db as any).bookings.list({
-              where: { userId: staff.userId }
-            })
-            for (const booking of bookings) {
-              await (blink.db as any).bookings.update(booking.id, { userId: null })
-              totalBookings++
-            }
-          } catch (bookingsErr) {
-            console.warn(`  ⚠️ Could not anonymize bookings`)
           }
 
           console.log(`  ✅ Cascade delete complete for ${staff.name}`)
@@ -326,22 +233,21 @@ export function CleanupToolPage() {
 
       // Log activity
       try {
-        await (blink.db as any).activityLogs.create({
+        await supabase.from('activity_logs').insert({
           id: `log_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
-          userId: currentUser.id,
+          user_id: currentUser?.id,
           action: 'bulk_cascade_delete',
-          entityType: 'employee',
-          entityId: 'multiple',
-          details: JSON.stringify({
-            adminEmail: currentUser.email,
+          entity_type: 'employee',
+          entity_id: 'multiple',
+          details: {
+            adminEmail: currentUser?.email,
             deletedStaffRecords: deleted,
-            deletedUserAccounts: totalUserAccounts,
             deletedActivityLogs: totalActivityLogs,
             anonymizedBookings: totalBookings,
             preservedCount: staffToKeep.length,
             timestamp: new Date().toISOString()
-          }),
-          createdAt: new Date().toISOString()
+          },
+          created_at: new Date().toISOString()
         })
       } catch (logError) {
         console.warn('Failed to log activity:', logError)

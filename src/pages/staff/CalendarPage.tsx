@@ -4,7 +4,7 @@ import { Card, CardContent } from '../../components/ui/card'
 import { Button } from '../../components/ui/button'
 import { ChevronLeft, ChevronRight, Plus, Calendar as CalendarIcon, List, LayoutGrid, Filter, Users, X as XIcon } from 'lucide-react'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { blink } from '../../blink/client'
+import { supabase } from '../../lib/supabase'
 import { cn } from '../../lib/utils'
 import { getRoomDisplayName, calculateNights } from '../../lib/display'
 import { useStaffRole } from '../../hooks/use-staff-role'
@@ -68,15 +68,15 @@ export function CalendarPage() {
 
   const loadData = async () => {
     try {
-      const user = await blink.auth.me()
-
-      const [roomsData, propertiesData, roomTypesData, localBookings] = await Promise.all([
-        (blink.db as any).rooms.list({ limit: 500 }),
-        // Load ALL properties without userId filter to prevent data loss (properties are project-scoped)
-        (blink.db as any).properties.list({ orderBy: { createdAt: 'desc' }, limit: 500 }),
-        (blink.db as any).roomTypes.list({ limit: 500 }),
+      const [roomsResult, roomTypesResult, localBookings] = await Promise.all([
+        supabase.from('rooms').select('id, room_number, status, room_type_id, price').limit(500),
+        supabase.from('room_types').select('id, name, base_price').limit(500),
         bookingEngine.getAllBookings()
       ])
+
+      const roomsData = (roomsResult.data || []).map((r: any) => ({ id: r.id, roomNumber: r.room_number, status: r.status, roomTypeId: r.room_type_id, price: r.price }))
+      const roomTypesData = (roomTypesResult.data || []).map((rt: any) => ({ id: rt.id, name: rt.name, basePrice: rt.base_price }))
+      const propertiesData = roomsData // rooms table is source of truth post-migration
 
       // Build property list sourced from Staff Rooms (properties) but keyed by room.id for booking alignment
       const roomByNumber = new Map((roomsData || []).map((r: any) => [String(r.roomNumber || '').trim(), r]))
@@ -287,7 +287,7 @@ export function CalendarPage() {
 
       if (!createdBy) {
         try {
-          const currentUser = await blink.auth.me()
+          const { data: { user: currentUser } } = await supabase.auth.getUser()
           createdBy = currentUser?.id
           console.log('[CalendarPage] Fallback: Using current user ID:', createdBy)
         } catch (error) {

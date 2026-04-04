@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { blink } from '@/blink/client'
+import { supabase } from '@/lib/supabase'
 import { activityLogService } from '@/services/activity-log-service'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -19,7 +19,7 @@ interface Booking { id: string; }
 
 export function NewInvoicePage() {
   const navigate = useNavigate()
-  const db = (blink.db as any)
+  // (db shim removed)
   const { currency } = useCurrency()
 
   const [user, setUser] = useState<any>(null)
@@ -38,19 +38,23 @@ export function NewInvoicePage() {
   const [dateOfSale, setDateOfSale] = useState<Date>(new Date())
 
   useEffect(() => {
-    const unsub = blink.auth.onAuthStateChanged((state) => {
-      setUser(state.user)
-      if (!state.user && !state.isLoading) navigate('/staff')
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      setUser(user)
+      if (!user) navigate('/staff')
     })
-    return unsub
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user || null)
+      if (!session?.user) navigate('/staff')
+    })
+    return () => subscription.unsubscribe()
   }, [navigate])
 
   useEffect(() => {
     if (!user) return
     const load = async () => {
       try {
-        const list = await db.bookings.list({ orderBy: { createdAt: 'desc' }, limit: 50 })
-        setBookings(list)
+        const { data: list } = await supabase.from('bookings').select('id').order('created_at', { ascending: false }).limit(50)
+        setBookings(list || [])
       } catch (err) {
         console.debug('Failed to load bookings', err)
       }

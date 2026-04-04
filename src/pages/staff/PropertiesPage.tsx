@@ -5,7 +5,7 @@ import { Input } from '../../components/ui/input'
 import { Label } from '../../components/ui/label'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '../../components/ui/dialog'
 import { Plus, Building2, Bed, Users, DollarSign, MoreVertical, Pencil, Trash2, ShieldAlert } from 'lucide-react'
-import { blink } from '../../blink/client'
+import { supabase } from '../../lib/supabase'
 import { bookingEngine } from '@/services/booking-engine'
 import type { RoomType } from '@/types'
 import { toast } from 'sonner'
@@ -63,16 +63,22 @@ export function PropertiesPage() {
 
   const loadProperties = async () => {
     try {
-      // Wait for authentication to be fully initialized
-      const user = await blink.auth.me()
-
-      // Load properties AND bookings
-      const [data, allBookings] = await Promise.all([
-        blink.db.properties.list({
-          orderBy: { column: 'createdAt', ascending: false }
-        }),
+      // Load rooms AND bookings
+      const [roomsResult, allBookings] = await Promise.all([
+        supabase.from('rooms').select('id, room_number, status, room_type_id, price, description').order('room_number'),
         bookingEngine.getAllBookings()
       ])
+
+      const data = (roomsResult.data || []).map((r: any) => ({
+        id: r.id,
+        roomNumber: r.room_number,
+        name: r.room_number,
+        status: r.status || 'available',
+        propertyTypeId: r.room_type_id,
+        basePrice: r.price || 0,
+        description: r.description || '',
+        maxGuests: 2, bedrooms: 1, bathrooms: 1
+      }))
 
       setBookings(allBookings)
 
@@ -129,36 +135,31 @@ export function PropertiesPage() {
 
   const loadRoomTypes = async () => {
     try {
-      const types = await (blink.db as any).roomTypes.list<RoomType>({ orderBy: { column: 'createdAt', ascending: true } })
+      const { data: typesData } = await supabase.from('room_types').select('id, name, base_price, capacity').order('created_at')
+      const types: RoomType[] = (typesData || []).map((rt: any) => ({ id: rt.id, name: rt.name, basePrice: rt.base_price, capacity: rt.capacity }))
 
-      // Ensure default types exist (robust check)
+      // Ensure default types exist
       const defaults = [
-        { name: 'Standard Room', capacity: 2, basePrice: 100 },
-        { name: 'Executive Suite', capacity: 2, basePrice: 250 },
-        { name: 'Deluxe Room', capacity: 2, basePrice: 150 },
-        { name: 'Family Room', capacity: 4, basePrice: 200 },
-        { name: 'Presidential Suite', capacity: 5, basePrice: 500 }
+        { name: 'Standard Room', capacity: 2, base_price: 100 },
+        { name: 'Executive Suite', capacity: 2, base_price: 250 },
+        { name: 'Deluxe Room', capacity: 2, base_price: 150 },
+        { name: 'Family Room', capacity: 4, base_price: 200 },
+        { name: 'Presidential Suite', capacity: 5, base_price: 500 }
       ]
 
       let seeded = false
       for (const def of defaults) {
-        // Check if this specific type exists (case-insensitive)
         const exists = types.some(t => t.name?.toLowerCase() === def.name.toLowerCase())
         if (!exists) {
-          await (blink.db as any).roomTypes.create({
-            id: crypto.randomUUID(),
-            ...def,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString()
-          })
+          await supabase.from('room_types').insert({ id: crypto.randomUUID(), ...def })
           seeded = true
         }
       }
 
       if (seeded) {
         toast.info('Initializing missing room types...')
-        // Reload if we added anything
-        const allTypes = await (blink.db as any).roomTypes.list<RoomType>({ orderBy: { column: 'createdAt', ascending: true } })
+        const { data: allTypesData } = await supabase.from('room_types').select('id, name, base_price, capacity').order('created_at')
+        const allTypes: RoomType[] = (allTypesData || []).map((rt: any) => ({ id: rt.id, name: rt.name, basePrice: rt.base_price, capacity: rt.capacity }))
         setRoomTypes(allTypes)
         if (!formData.propertyTypeId && allTypes.length > 0) {
           setFormData((prev) => ({ ...prev, propertyTypeId: allTypes[0].id }))
@@ -177,28 +178,14 @@ export function PropertiesPage() {
 
   // Sync corresponding entry in rooms table so booking dropdown shows only created rooms
   const syncRoomWithProperty = async (payload: { roomNumber: string; propertyTypeId: string; basePrice: number }) => {
-    const db = blink.db as any
     const rn = (payload.roomNumber || '').toString().trim()
     if (!rn) return
-    const rtId = payload.propertyTypeId
-    const price = Number(payload.basePrice) || 0
     try {
-      const existing = (await db.rooms.list({ where: { roomNumber: rn }, limit: 1 }))?.[0]
+      const { data: existing } = await supabase.from('rooms').select('id, status').eq('room_number', rn).maybeSingle()
       if (existing) {
-        await db.rooms.update(existing.id, {
-          roomTypeId: rtId,
-          price,
-          status: existing.status || 'available'
-        })
+        await supabase.from('rooms').update({ room_type_id: payload.propertyTypeId, price: Number(payload.basePrice) || 0 }).eq('id', existing.id)
       } else {
-        await db.rooms.create({
-          id: crypto.randomUUID(),
-          roomNumber: rn,
-          roomTypeId: rtId,
-          status: 'available',
-          price,
-          imageUrls: ''
-        })
+        await supabase.from('rooms').insert({ id: crypto.randomUUID(), room_number: rn, room_type_id: payload.propertyTypeId, status: 'available', price: Number(payload.basePrice) || 0 })
       }
     } catch (e) {
       console.warn('Failed to sync room record:', e)
@@ -218,8 +205,7 @@ export function PropertiesPage() {
     }
 
     try {
-      // Get current user but don't require it - properties are project-scoped
-      const user = await blink.auth.me().catch(() => null)
+      const { data: { user } } = await supabase.auth.getUser().catch(() => ({ data: { user: null } }))
 
       if (!formData.propertyTypeId) {
         toast.error('Please select a room type')
@@ -239,7 +225,7 @@ export function PropertiesPage() {
           description: formData.description || '',
           updatedAt: new Date().toISOString()
         }
-        await blink.db.properties.update(editingId, payload)
+        await supabase.from('rooms').update({ room_number: payload.roomNumber, room_type_id: payload.propertyTypeId, price: payload.basePrice, description: payload.description, updated_at: new Date().toISOString() }).eq('id', editingId)
         await syncRoomWithProperty({ roomNumber: payload.roomNumber, propertyTypeId: payload.propertyTypeId, basePrice: payload.basePrice })
         toast.success('Room updated')
 
@@ -281,8 +267,8 @@ export function PropertiesPage() {
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString()
         }
-        console.log('[PropertiesPage] Creating property with payload:', createPayload)
-        await blink.db.properties.create(createPayload)
+        console.log('[PropertiesPage] Creating room with payload:', createPayload)
+        await supabase.from('rooms').insert({ id: createPayload.id, room_number: createPayload.roomNumber, room_type_id: createPayload.propertyTypeId, status: 'available', price: createPayload.basePrice, description: createPayload.description })
         await syncRoomWithProperty({ roomNumber: createPayload.roomNumber, propertyTypeId: createPayload.propertyTypeId, basePrice: createPayload.basePrice })
         toast.success('Room added successfully')
 
@@ -344,31 +330,20 @@ export function PropertiesPage() {
     }
 
     try {
-      // Find property to know its roomNumber for room sync delete
-      const prop = (await blink.db.properties.list({ where: { id: deleteId }, limit: 1 }))?.[0]
-      await blink.db.properties.delete(deleteId)
-      if (prop?.roomNumber) {
-        try {
-          const existing = (await (blink.db as any).rooms.list({ where: { roomNumber: String(prop.roomNumber).trim() }, limit: 1 }))?.[0]
-          if (existing) {
-            await (blink.db as any).rooms.delete(existing.id)
-          }
-        } catch (e) {
-          console.warn('Failed to delete synced room record:', e)
-        }
-      }
+      const { data: prop } = await supabase.from('rooms').select('id, room_number').eq('id', deleteId).maybeSingle()
+      const { error: delError } = await supabase.from('rooms').delete().eq('id', deleteId)
+      if (delError) throw delError
       toast.success('Room deleted')
 
       // Log room deletion
       try {
-        const user = await blink.auth.me().catch(() => null)
+        const { data: { user } } = await supabase.auth.getUser().catch(() => ({ data: { user: null } }))
         await activityLogService.log({
           action: 'deleted',
           entityType: 'room',
           entityId: deleteId,
           details: {
-            roomNumber: prop?.roomNumber || 'unknown',
-            roomName: prop?.name || '',
+            roomNumber: (prop as any)?.room_number || 'unknown',
             deletedAt: new Date().toISOString()
           },
           userId: user?.id || 'system'

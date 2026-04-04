@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { blink } from '@/blink/client'
+import { supabase } from '@/lib/supabase'
 import { RoomType } from '@/types'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
@@ -12,7 +12,6 @@ import { useCurrency } from '@/hooks/use-currency'
 import { ReviewsCarousel } from '@/components/landing/ReviewsCarousel'
 
 export function HomePage() {
-  const db = (blink.db as any)
   const { currency } = useCurrency()
   const amenities = [
     { icon: Bed, label: 'Luxury Rooms' },
@@ -41,7 +40,8 @@ export function HomePage() {
     // Load a few room types for the landing section
     const load = async () => {
       try {
-        const types = await db.roomTypes.list()
+        const { data } = await supabase.from('room_types').select('*').limit(10)
+        const types = (data || []).map((r: any) => ({ ...r, basePrice: r.base_price, imageUrl: r.image_url }))
         // Filter and keep all room types (show up to 3)
         const filtered = (types as RoomType[]).filter(t => t.name)
 

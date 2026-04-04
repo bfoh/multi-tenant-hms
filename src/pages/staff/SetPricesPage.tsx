@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { blink } from '@/blink/client'
+import { supabase } from '@/lib/supabase'
 import type { RoomType } from '@/types'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -12,7 +12,6 @@ import { activityLogService } from '@/services/activity-log-service'
 import { RefreshCw, Plus, Tag } from 'lucide-react'
 
 export function SetPricesPage() {
-  const db = (blink.db as any)
   const [roomTypes, setRoomTypes] = useState<RoomType[]>([])
   const [edited, setEdited] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(true)
@@ -31,7 +30,8 @@ export function SetPricesPage() {
   const loadRoomTypes = async () => {
     setLoading(true)
     try {
-      const types = await db.roomTypes.list({ orderBy: { column: 'createdAt', ascending: true } })
+      const { data: rawTypes } = await supabase.from('room_types').select('id, name, base_price, capacity').order('created_at')
+      const types: RoomType[] = (rawTypes || []).map((rt: any) => ({ id: rt.id, name: rt.name, basePrice: rt.base_price, capacity: rt.capacity }))
       console.log('📊 [SetPrices] Loaded room types:', types.length)
       console.log('📊 [SetPrices] Room types data:', JSON.stringify(types, null, 2))
       if (types.length > 0) {
@@ -61,7 +61,8 @@ export function SetPricesPage() {
       // Check which types already exist
       let existingTypes: RoomType[] = []
       try {
-        existingTypes = await db.roomTypes.list() || []
+        const { data: rtData } = await supabase.from('room_types').select('id, name, base_price, capacity')
+        existingTypes = (rtData || []).map((rt: any) => ({ id: rt.id, name: rt.name, basePrice: rt.base_price, capacity: rt.capacity }))
         console.log('📊 [SetPrices] Existing room types:', existingTypes.length)
       } catch (listErr) {
         console.warn('⚠️ [SetPrices] Could not list existing room types:', listErr)
@@ -80,13 +81,11 @@ export function SetPricesPage() {
           // Create new room type
           try {
             console.log(`📝 [SetPrices] Creating room type: ${type.name}`)
-            const result = await db.roomTypes.create({
+            const { data: result, error: createErr2 } = await supabase.from('room_types').insert({
               id: crypto.randomUUID(),
               name: type.name,
               capacity: type.capacity,
-              basePrice: type.basePrice,
-              createdAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString()
+              base_price: type.basePrice
             })
             console.log(`✅ [SetPrices] Created: ${type.name}`, result)
             created++
@@ -98,7 +97,7 @@ export function SetPricesPage() {
           // Update existing room type that's missing capacity
           try {
             console.log(`🔄 [SetPrices] Updating ${type.name} with capacity: ${type.capacity}`)
-            await db.roomTypes.update(existingType.id, { capacity: type.capacity })
+            await supabase.from('room_types').update({ capacity: type.capacity }).eq('id', existingType.id)
             console.log(`✅ [SetPrices] Updated: ${type.name}`)
             created++
           } catch (updateErr: any) {
@@ -138,21 +137,11 @@ export function SetPricesPage() {
   // Sync price update to all rooms that use this room type
   const syncPriceToRooms = async (roomTypeId: string, newPrice: number) => {
     try {
-      // Find all rooms with this room type
-      const rooms = await db.rooms.list({ where: { roomTypeId } })
-
-      // Update each room's price
-      for (const room of rooms) {
-        await db.rooms.update(room.id, { price: newPrice })
+      const { data: rooms } = await supabase.from('rooms').select('id').eq('room_type_id', roomTypeId)
+      if (rooms && rooms.length > 0) {
+        await supabase.from('rooms').update({ price: newPrice }).eq('room_type_id', roomTypeId)
       }
-
-      // Also update properties that reference this room type
-      const properties = await blink.db.properties.list({ where: { propertyTypeId: roomTypeId } })
-      for (const prop of properties) {
-        await blink.db.properties.update(prop.id, { basePrice: newPrice })
-      }
-
-      console.log(`✅ Synced price to ${rooms.length} rooms and ${properties.length} properties`)
+      console.log(`✅ Synced price to ${rooms?.length || 0} rooms`)
     } catch (err) {
       console.warn('Failed to sync price to rooms:', err)
     }
@@ -167,10 +156,7 @@ export function SetPricesPage() {
     setSaving(true)
     try {
       // Update room type
-      await db.roomTypes.update(id, {
-        basePrice: newValue,
-        updatedAt: new Date().toISOString()
-      })
+      await supabase.from('room_types').update({ base_price: newValue, updated_at: new Date().toISOString() }).eq('id', id)
 
       // Sync to all rooms using this type
       await syncPriceToRooms(id, newValue)
@@ -186,7 +172,7 @@ export function SetPricesPage() {
 
       // Log price change
       try {
-        const user = await blink.auth.me().catch(() => null)
+        const { data: { user } } = await supabase.auth.getUser().catch(() => ({ data: { user: null } }))
         const roomType = roomTypes.find(rt => rt.id === id)
         await activityLogService.log({
           action: 'updated',
@@ -219,10 +205,7 @@ export function SetPricesPage() {
       for (const [id, val] of Object.entries(edited)) {
         const price = Number(val)
         if (isFinite(price) && price > 0) {
-          await db.roomTypes.update(id, {
-            basePrice: price,
-            updatedAt: new Date().toISOString()
-          })
+          await supabase.from('room_types').update({ base_price: price, updated_at: new Date().toISOString() }).eq('id', id)
           await syncPriceToRooms(id, price)
         }
       }
@@ -234,7 +217,7 @@ export function SetPricesPage() {
 
       // Log bulk price update
       try {
-        const user = await blink.auth.me().catch(() => null)
+        const { data: { user } } = await supabase.auth.getUser().catch(() => ({ data: { user: null } }))
         const changes = Object.entries(edited).map(([id, val]) => {
           const rt = roomTypes.find(r => r.id === id)
           return `${rt?.name || 'Unknown'}: ${rt?.basePrice || 0} → ${val}`

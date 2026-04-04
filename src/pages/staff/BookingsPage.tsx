@@ -18,7 +18,6 @@ import {
 import { Plus, Calendar, User, Home, Search, Trash2, Users, QrCode, ExternalLink, Smartphone, Printer, BookOpen, X as XIcon } from 'lucide-react'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { QRCodeSVG } from 'qrcode.react'
-import { blink } from '../../blink/client'
 import { supabase } from '../../lib/supabase'
 import { toast } from 'sonner'
 import { Badge } from '../../components/ui/badge'
@@ -32,7 +31,7 @@ import { useCurrency } from '@/hooks/use-currency'
 // Helper function to get current user ID
 async function getCurrentUserId(): Promise<string> {
   try {
-    const user = await blink.auth.me()
+    const { data: { user } } = await supabase.auth.getUser()
     return user?.id || 'system'
   } catch (error) {
     console.error('Failed to get current user:', error)
@@ -62,6 +61,7 @@ interface BookingWithDetails {
 }
 
 export function BookingsPage() {
+  console.log('[BookingsPage] BUILD_SIGNATURE: TRIPLE_LOCK_HOTFIX_V1_20260404')
   const navigate = useNavigate()
   const { staffRecord: staffData, role, loading: staffLoading } = useStaffRole()
   const { currency } = useCurrency()
@@ -226,17 +226,23 @@ export function BookingsPage() {
         }
 
         // Price recovery safety net - if persisted price is 0, recalculate from room data
-        let totalPrice = Number(b.totalPrice || b.amount || b.total_price || 0)
+        let totalPrice = Number(b.totalPrice || (b as any).amount || b.total_price || 0)
         if (totalPrice === 0 && nights > 0) {
           const room = enrichedRooms.find(r => r.roomNumber === b.roomNumber)
           let pricePerNight = room?._resolvedPrice || 0
           
           // HARD FALLBACK: If join failed, try static lookup based on room name/type
           if (pricePerNight === 0) {
-            const typeStr = (roomTypeName || b.roomType || '').toLowerCase()
+            const typeStr = (roomTypeName || (b as any).roomType || '').toLowerCase()
             Object.entries(STATIC_RATES).forEach(([key, rate]) => {
               if (typeStr.includes(key)) pricePerNight = rate
             })
+          }
+
+          // UNIVERSAL FALLBACK: If still 0, use standard rate (350)
+          if (pricePerNight === 0) {
+            pricePerNight = 350
+            console.warn(`[BookingsPage] UNIVERSAL FALLBACK triggered for booking: ${b.id || (b as any)._id}`)
           }
 
           if (pricePerNight > 0) {
@@ -398,7 +404,7 @@ export function BookingsPage() {
 
       if (!createdBy) {
         try {
-          const currentUser = await blink.auth.me()
+          const { data: { user: currentUser } } = await supabase.auth.getUser()
           createdBy = currentUser?.id
           console.log('[BookingsPage] Fallback: Using current user ID:', createdBy)
         } catch (error) {

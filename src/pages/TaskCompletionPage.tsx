@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { blink } from '@/blink/client'
+import { supabase } from '@/lib/supabase'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { CheckCircle2, Clock, Home, AlertCircle } from 'lucide-react'
@@ -45,23 +45,37 @@ export function TaskCompletionPage() {
       setError(null)
 
       // Load task data
-      const taskData = await blink.db.housekeepingTasks.list({
-        where: { id: taskId }
-      })
+      const { data: taskData } = await supabase
+        .from('housekeeping_tasks')
+        .select('*')
+        .eq('id', taskId)
+        .limit(1)
 
       if (!taskData || taskData.length === 0) {
         setError('Task not found')
         return
       }
 
-      const taskInfo = taskData[0] as HousekeepingTask
+      const t = taskData[0]
+      const taskInfo: HousekeepingTask = {
+        id: t.id,
+        propertyId: t.property_id || t.room_id || '',
+        roomNumber: t.room_number || '',
+        assignedTo: t.assigned_to || null,
+        status: t.status,
+        notes: t.notes || null,
+        createdAt: t.created_at,
+        completedAt: t.completed_at || null,
+      }
       setTask(taskInfo)
 
       // Load staff data if task is assigned
       if (taskInfo.assignedTo) {
-        const staffData = await blink.db.staff.list({
-          where: { id: taskInfo.assignedTo }
-        })
+        const { data: staffData } = await supabase
+          .from('staff')
+          .select('id, name, email, role')
+          .eq('id', taskInfo.assignedTo)
+          .limit(1)
         if (staffData && staffData.length > 0) {
           setStaff(staffData[0] as Staff)
         }
@@ -86,32 +100,19 @@ export function TaskCompletionPage() {
       setCompleting(true)
 
       // Update task status to completed
-      await blink.db.housekeepingTasks.update(task.id, {
-        status: 'completed',
-        completedAt: new Date().toISOString()
-      })
+      await supabase
+        .from('housekeeping_tasks')
+        .update({ status: 'completed', completed_at: new Date().toISOString() })
+        .eq('id', task.id)
 
       // Find and update room status
       try {
-        const rooms = await blink.db.rooms.list()
-        const room = rooms.find((r: any) => r.roomNumber === task.roomNumber)
+        const { data: rooms } = await supabase.from('rooms').select('id, room_number, status')
+        const room = (rooms || []).find((r: any) => r.room_number === task.roomNumber)
 
         if (room && room.status?.toLowerCase() === 'cleaning') {
-          console.log(`[TaskCompletion] Updating room ${room.roomNumber} to available`)
-          await blink.db.rooms.update(room.id, {
-            status: 'available'
-          })
-
-          try {
-            const properties = await blink.db.properties.list({ limit: 500 })
-            const property = properties.find((p: any) => p.id === room.id || p.roomNumber === room.roomNumber)
-            if (property && property.status !== 'active') {
-              console.log(`[TaskCompletion] Syncing property ${property.id} status to active`)
-              await blink.db.properties.update(property.id, { status: 'active' })
-            }
-          } catch (propUpdateError) {
-            console.warn('Could not update property status:', propUpdateError)
-          }
+          console.log(`[TaskCompletion] Updating room ${room.room_number} to available`)
+          await supabase.from('rooms').update({ status: 'available' }).eq('id', room.id)
         } else {
           console.log(`[TaskCompletion] Room status is '${room?.status}', not updating to available`)
         }
@@ -121,21 +122,21 @@ export function TaskCompletionPage() {
 
       // Log activity
       try {
-        const currentUser = await blink.auth.me()
+        const { data: { user: currentUser } } = await supabase.auth.getUser()
         if (currentUser) {
-          await blink.db.activityLogs.create({
+          await supabase.from('activity_logs').insert({
             id: `log_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
-            userId: currentUser.id,
+            user_id: currentUser.id,
             action: 'completed',
-            entityType: 'housekeeping_task',
-            entityId: task.id,
+            entity_type: 'housekeeping_task',
+            entity_id: task.id,
             details: JSON.stringify({
               roomNumber: task.roomNumber,
               taskId: task.id,
               completedVia: 'external_completion_page',
               timestamp: new Date().toISOString()
             }),
-            createdAt: new Date().toISOString()
+            created_at: new Date().toISOString()
           })
         }
       } catch (logError) {

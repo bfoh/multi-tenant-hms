@@ -1,11 +1,10 @@
 /**
  * Standalone Sales Service
  * Tracks walk-in / non-booking sales (bar, restaurant, etc.)
- * Table: standaloneSales — auto-created by blink on first insert.
+ * Table: standalone_sales
  */
 
-import { blink } from '@/blink/client'
-import { format } from 'date-fns'
+import { supabase } from '@/lib/supabase'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -31,26 +30,46 @@ export const SALE_CATEGORIES: Record<StandaloneSale['category'], string> = {
   other:         'Other',
 }
 
+function _toCC(r: any): StandaloneSale {
+  return {
+    id: r.id,
+    description: r.description,
+    category: r.category,
+    quantity: r.quantity,
+    unitPrice: r.unit_price ?? r.unitPrice ?? 0,
+    amount: r.amount,
+    notes: r.notes || '',
+    staffId: r.staff_id ?? r.staffId ?? '',
+    staffName: r.staff_name ?? r.staffName ?? '',
+    saleDate: r.sale_date ?? r.saleDate ?? '',
+    paymentMethod: r.payment_method ?? r.paymentMethod ?? 'cash',
+    createdAt: r.created_at ?? r.createdAt ?? '',
+  }
+}
+
 // ─── Service ──────────────────────────────────────────────────────────────────
 
 export const standaloneSalesService = {
   async addSale(
     data: Omit<StandaloneSale, 'id' | 'createdAt'>
   ): Promise<StandaloneSale> {
-    const db = blink.db as any
-    const record: StandaloneSale = {
-      ...data,
+    const record = {
       id: `sale_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-      createdAt: new Date().toISOString(),
+      description: data.description,
+      category: data.category,
+      quantity: data.quantity,
+      unit_price: data.unitPrice,
+      amount: data.amount,
+      notes: data.notes,
+      staff_id: data.staffId,
+      staff_name: data.staffName,
+      sale_date: data.saleDate,
+      payment_method: data.paymentMethod,
+      created_at: new Date().toISOString(),
     }
-    try {
-      await db.standaloneSales.create(record)
-    } catch (e) {
-      console.warn('[standaloneSalesService] create failed (table may not exist yet):', e)
-      // Try again — blink sometimes needs two attempts after auto-creating
-      await db.standaloneSales.create(record)
-    }
-    return record
+    const { data: inserted, error } = await supabase.from('standalone_sales').insert(record).select().single()
+    if (error) throw error
+    return _toCC(inserted)
   },
 
   /** Fetch sales for a specific staff member within a date range (inclusive). */
@@ -59,16 +78,17 @@ export const standaloneSalesService = {
     weekStart: string,
     weekEnd: string
   ): Promise<StandaloneSale[]> {
-    const db = blink.db as any
     try {
-      const rows = await db.standaloneSales.list({ limit: 2000 })
-      return ((rows || []) as StandaloneSale[]).filter((s) => {
-        const sid = (s as any).staffId || (s as any).staff_id || ''
-        const sd  = (s as any).saleDate || (s as any).sale_date || ''
-        return sid === staffId && sd >= weekStart && sd <= weekEnd
-      })
+      const { data } = await supabase
+        .from('standalone_sales')
+        .select('*')
+        .eq('staff_id', staffId)
+        .gte('sale_date', weekStart)
+        .lte('sale_date', weekEnd)
+        .limit(2000)
+      return (data || []).map(_toCC)
     } catch (e) {
-      console.warn('[standaloneSalesService] getSalesForStaff failed (table may not exist yet):', e)
+      console.warn('[standaloneSalesService] getSalesForStaff failed:', e)
       return []
     }
   },
@@ -78,13 +98,14 @@ export const standaloneSalesService = {
     weekStart: string,
     weekEnd: string
   ): Promise<StandaloneSale[]> {
-    const db = blink.db as any
     try {
-      const rows = await db.standaloneSales.list({ limit: 2000 })
-      return ((rows || []) as StandaloneSale[]).filter((s) => {
-        const sd = (s as any).saleDate || (s as any).sale_date || ''
-        return sd >= weekStart && sd <= weekEnd
-      })
+      const { data } = await supabase
+        .from('standalone_sales')
+        .select('*')
+        .gte('sale_date', weekStart)
+        .lte('sale_date', weekEnd)
+        .limit(2000)
+      return (data || []).map(_toCC)
     } catch (e) {
       console.warn('[standaloneSalesService] getAllSalesForWeek failed:', e)
       return []
@@ -93,10 +114,12 @@ export const standaloneSalesService = {
 
   /** Fetch ALL sales ever (for analytics). */
   async getAllSales(): Promise<StandaloneSale[]> {
-    const db = blink.db as any
     try {
-      const rows = await db.standaloneSales.list({ limit: 5000 })
-      return (rows || []) as StandaloneSale[]
+      const { data } = await supabase
+        .from('standalone_sales')
+        .select('*')
+        .limit(5000)
+      return (data || []).map(_toCC)
     } catch (e) {
       console.warn('[standaloneSalesService] getAllSales failed:', e)
       return []
@@ -104,7 +127,6 @@ export const standaloneSalesService = {
   },
 
   async deleteSale(id: string): Promise<void> {
-    const db = blink.db as any
-    await db.standaloneSales.delete(id)
+    await supabase.from('standalone_sales').delete().eq('id', id)
   },
 }

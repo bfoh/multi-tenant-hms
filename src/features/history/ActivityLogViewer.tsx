@@ -4,7 +4,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { blink } from '@/blink/client'
+import { supabase } from '@/lib/supabase'
 import { Loader2, Search, FileEdit, Trash2, UserPlus, Shield, Clock } from 'lucide-react'
 import { format } from 'date-fns'
 
@@ -60,13 +60,27 @@ export function ActivityLogViewer({
       if (entityType) where.entityType = entityType
       if (entityId) where.entityId = entityId
 
-      const activityLogs = await blink.db.activityLogs.list({
-        where,
-        orderBy: { createdAt: 'desc' },
-        limit
-      })
+      let query = supabase
+        .from('activity_logs')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(limit)
 
-      setLogs(activityLogs as ActivityLog[])
+      if (entityType) query = query.eq('entity_type', entityType)
+      if (entityId) query = query.eq('entity_id', entityId)
+
+      const { data } = await query
+      const activityLogs: ActivityLog[] = (data || []).map((r: any) => ({
+        id: r.id,
+        userId: r.user_id,
+        action: r.action,
+        entityType: r.entity_type,
+        entityId: r.entity_id,
+        details: r.details,
+        createdAt: r.created_at,
+      }))
+
+      setLogs(activityLogs)
     } catch (error) {
       console.error('Failed to load activity logs:', error)
     } finally {

@@ -6,8 +6,99 @@
  * Grand revenue = room prices + booking charges + standalone sales.
  */
 
-import { blink } from '@/blink/client'
+import { supabase } from '@/lib/supabase'
 import { startOfWeek, endOfWeek, format, subWeeks } from 'date-fns'
+
+function _ccRevenue(r: any): WeeklyRevenueReport {
+  return {
+    id: r.id,
+    staffId: r.staff_id ?? r.staffId ?? '',
+    staffName: r.staff_name ?? r.staffName ?? '',
+    weekStart: r.week_start ?? r.weekStart ?? '',
+    weekEnd: r.week_end ?? r.weekEnd ?? '',
+    totalRevenue: r.total_revenue ?? r.totalRevenue ?? 0,
+    bookingCount: r.booking_count ?? r.bookingCount ?? 0,
+    bookingIds: r.booking_ids ?? r.bookingIds ?? '[]',
+    status: r.status ?? 'draft',
+    notes: r.notes ?? '',
+    adminNotes: r.admin_notes ?? r.adminNotes ?? '',
+    reviewedBy: r.reviewed_by ?? r.reviewedBy ?? '',
+    reviewedAt: r.reviewed_at ?? r.reviewedAt ?? '',
+    submittedAt: r.submitted_at ?? r.submittedAt ?? '',
+    createdAt: r.created_at ?? r.createdAt ?? '',
+    updatedAt: r.updated_at ?? r.updatedAt ?? '',
+  }
+}
+
+const _revenueDb = {
+  bookings: {
+    list: async (opts?: { limit?: number }) => {
+      const { data } = await supabase.from('bookings').select('*').limit(opts?.limit || 2000)
+      return data || []
+    },
+  },
+  rooms: {
+    list: async (opts?: { limit?: number }) => {
+      const { data } = await supabase.from('rooms').select('*').limit(opts?.limit || 500)
+      return (data || []).map((r: any) => ({ ...r, roomNumber: r.room_number, roomTypeId: r.room_type_id }))
+    },
+  },
+  guests: {
+    list: async (opts?: { limit?: number }) => {
+      const { data } = await supabase.from('guests').select('*').limit(opts?.limit || 1000)
+      return data || []
+    },
+  },
+  bookingCharges: {
+    list: async (opts?: { limit?: number }) => {
+      const { data } = await supabase.from('booking_charges').select('*').limit(opts?.limit || 5000)
+      return data || []
+    },
+  },
+  hr_weekly_revenue: {
+    list: async (opts?: { limit?: number }) => {
+      const { data } = await supabase.from('hr_weekly_revenue').select('*').limit(opts?.limit || 500)
+      return (data || []).map(_ccRevenue)
+    },
+    create: async (record: WeeklyRevenueReport) => {
+      const { error } = await supabase.from('hr_weekly_revenue').insert({
+        id: record.id,
+        staff_id: record.staffId,
+        staff_name: record.staffName,
+        week_start: record.weekStart,
+        week_end: record.weekEnd,
+        total_revenue: record.totalRevenue,
+        booking_count: record.bookingCount,
+        booking_ids: record.bookingIds,
+        status: record.status,
+        notes: record.notes,
+        admin_notes: record.adminNotes,
+        reviewed_by: record.reviewedBy,
+        reviewed_at: record.reviewedAt,
+        submitted_at: record.submittedAt,
+        created_at: record.createdAt,
+        updated_at: record.updatedAt,
+      })
+      if (error) console.warn('[hr_weekly_revenue] create failed:', error)
+    },
+    update: async (id: string, payload: Record<string, any>) => {
+      const snake: Record<string, any> = {}
+      if (payload.staffName !== undefined) snake.staff_name = payload.staffName
+      if (payload.totalRevenue !== undefined) snake.total_revenue = payload.totalRevenue
+      if (payload.bookingCount !== undefined) snake.booking_count = payload.bookingCount
+      if (payload.bookingIds !== undefined) snake.booking_ids = payload.bookingIds
+      if (payload.status !== undefined) snake.status = payload.status
+      if (payload.notes !== undefined) snake.notes = payload.notes
+      if (payload.adminNotes !== undefined) snake.admin_notes = payload.adminNotes
+      if (payload.reviewedBy !== undefined) snake.reviewed_by = payload.reviewedBy
+      if (payload.reviewedAt !== undefined) snake.reviewed_at = payload.reviewedAt
+      if (payload.submittedAt !== undefined) snake.submitted_at = payload.submittedAt
+      if (payload.updatedAt !== undefined) snake.updated_at = payload.updatedAt
+      const { error } = await supabase.from('hr_weekly_revenue').update(snake).eq('id', id)
+      if (error) console.warn('[hr_weekly_revenue] update failed:', error)
+    },
+  },
+}
 import { standaloneSalesService, type StandaloneSale } from './standalone-sales-service'
 import { CHARGE_CATEGORIES } from './booking-charges-service'
 
@@ -158,7 +249,7 @@ export async function fetchBookingsForStaffWeek(
   weekStart: string,
   weekEnd: string
 ): Promise<StaffWeekResult> {
-  const db = blink.db as any
+  const db = _revenueDb
 
   let allBookings: any = null, allRooms: any = null, allGuests: any = null, allChargesRaw: any = null
   try {
@@ -356,7 +447,7 @@ export async function getOrCreateWeekReport(
   staffName: string,
   week: WeekBounds
 ): Promise<WeeklyRevenueReport> {
-  const db = blink.db as any
+  const db = _revenueDb
 
   // Fetch all and filter client-side — blink SDK where-filter is unreliable for custom tables
   let allRows: WeeklyRevenueReport[] = []
@@ -430,7 +521,7 @@ export async function getOrCreateWeekReport(
  * Staff submits their weekly report (locks it from further auto-recalculation).
  */
 export async function submitWeekReport(reportId: string, notes: string): Promise<void> {
-  const db = blink.db as any
+  const db = _revenueDb
   await db.hr_weekly_revenue.update(reportId, {
     status: 'submitted',
     notes,
@@ -447,7 +538,7 @@ export async function reviewWeekReport(
   adminNotes: string,
   reviewedByName: string
 ): Promise<void> {
-  const db = blink.db as any
+  const db = _revenueDb
   await db.hr_weekly_revenue.update(reportId, {
     status: 'reviewed',
     adminNotes,
@@ -459,7 +550,7 @@ export async function reviewWeekReport(
 
 /** Get all staff reports for a specific week (admin view). */
 export async function getAllStaffReportsForWeek(weekStart: string): Promise<WeeklyRevenueReport[]> {
-  const db = blink.db as any
+  const db = _revenueDb
   try {
     const rows = await db.hr_weekly_revenue.list({ limit: 500 })
     return ((rows || []) as WeeklyRevenueReport[])
@@ -476,7 +567,7 @@ export async function getAllStaffReportsForWeek(weekStart: string): Promise<Week
 
 /** Get a staff member's own report history, newest first. */
 export async function getStaffAllReports(staffId: string): Promise<WeeklyRevenueReport[]> {
-  const db = blink.db as any
+  const db = _revenueDb
   try {
     const rows = await db.hr_weekly_revenue.list({ limit: 500 })
     return ((rows || []) as WeeklyRevenueReport[])

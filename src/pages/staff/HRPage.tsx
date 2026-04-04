@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { toast } from 'sonner'
-import { blink } from '@/blink/client'
+import { supabase } from '@/lib/supabase'
 import { useStaffRole } from '@/hooks/use-staff-role'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Button } from '@/components/ui/button'
@@ -161,7 +161,48 @@ interface StaffMember {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-const db = blink.db as any
+function _makeTbl(table: string) {
+  function toCC(row: any) {
+    if (!row) return row
+    const r: any = {}
+    for (const k of Object.keys(row)) r[k.replace(/_([a-z])/g, (_, c) => c.toUpperCase())] = row[k]
+    return r
+  }
+  function toSC(obj: any) {
+    const r: any = {}
+    for (const k of Object.keys(obj)) r[k.replace(/([A-Z])/g, m => `_${m.toLowerCase()}`)] = obj[k]
+    return r
+  }
+  return {
+    async list(opts?: any) {
+      const { data, error } = await supabase.from(table).select('*').order('created_at', { ascending: false })
+      if (error) throw error
+      return (data || []).map(toCC)
+    },
+    async create(payload: any) {
+      const { data, error } = await supabase.from(table).insert(toSC(payload)).select().single()
+      if (error) throw error
+      return toCC(data)
+    },
+    async update(id: string, payload: any) {
+      const { data, error } = await supabase.from(table).update(toSC(payload)).eq('id', id).select().maybeSingle()
+      if (error) throw error
+      return toCC(data)
+    },
+    async delete(id: string) {
+      const { error } = await supabase.from(table).delete().eq('id', id)
+      if (error) throw error
+    }
+  }
+}
+const db = {
+  staff: _makeTbl('staff'),
+  hr_attendance: _makeTbl('hr_attendance'),
+  hr_leave_requests: _makeTbl('hr_leave_requests'),
+  hr_payroll: _makeTbl('hr_payroll'),
+  hr_performance_reviews: _makeTbl('hr_performance_reviews'),
+  hr_job_applications: _makeTbl('hr_job_applications'),
+}
 
 function StatusBadge({ status }: { status: string }) {
   const variants: Record<string, string> = {

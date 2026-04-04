@@ -1,7 +1,5 @@
-import { blink } from '@/blink/client'
+import { supabase } from '@/lib/supabase'
 import { BookingCharge, ChargeCategory } from '@/types'
-
-const db = blink.db as any
 
 // Category display names for UI
 export const CHARGE_CATEGORIES: Record<ChargeCategory, string> = {
@@ -66,12 +64,19 @@ class BookingChargesService {
      */
     async getChargesForBooking(bookingId: string): Promise<BookingCharge[]> {
         try {
-            const charges = await db.bookingCharges.list({
-                where: { bookingId },
-                orderBy: { createdAt: 'desc' },
-                limit: 100
-            })
-            return (charges || []).map(enrichCharge)
+            const { data, error } = await supabase
+                .from('booking_charges')
+                .select('*')
+                .eq('booking_id', bookingId)
+                .order('created_at', { ascending: false })
+                .limit(100)
+            if (error) throw error
+            return (data || []).map((r: any) => enrichCharge({
+                id: r.id, bookingId: r.booking_id, description: r.description,
+                category: r.category, quantity: r.quantity, unitPrice: r.unit_price,
+                amount: r.amount, notes: r.notes, paymentMethod: r.payment_method,
+                createdBy: r.created_by, createdAt: r.created_at, updatedAt: r.updated_at,
+            }))
         } catch (error) {
             console.error('[BookingChargesService] Error fetching charges:', error)
             return []
@@ -93,21 +98,32 @@ class BookingChargesService {
         try {
             const amount = data.quantity * data.unitPrice
 
-            const charge = await db.bookingCharges.create({
-                bookingId: data.bookingId,
-                description: data.description,
-                category: data.category,
-                quantity: data.quantity,
-                unitPrice: data.unitPrice,
-                amount: amount,
-                notes: data.notes || null,
-                paymentMethod: data.paymentMethod || 'cash',
-                createdBy: data.createdBy || null,
-                createdAt: new Date().toISOString()
-            })
+            const { data: inserted, error } = await supabase
+                .from('booking_charges')
+                .insert({
+                    booking_id: data.bookingId,
+                    description: data.description,
+                    category: data.category,
+                    quantity: data.quantity,
+                    unit_price: data.unitPrice,
+                    amount,
+                    notes: data.notes || null,
+                    payment_method: data.paymentMethod || 'cash',
+                    created_by: data.createdBy || null,
+                    created_at: new Date().toISOString()
+                })
+                .select()
+                .single()
 
-            console.log('[BookingChargesService] Charge added:', charge.id)
-            return enrichCharge(charge)
+            if (error) throw error
+
+            console.log('[BookingChargesService] Charge added:', inserted.id)
+            return enrichCharge({
+                id: inserted.id, bookingId: inserted.booking_id, description: inserted.description,
+                category: inserted.category, quantity: inserted.quantity, unitPrice: inserted.unit_price,
+                amount: inserted.amount, notes: inserted.notes, paymentMethod: inserted.payment_method,
+                createdBy: inserted.created_by, createdAt: inserted.created_at, updatedAt: inserted.updated_at,
+            })
         } catch (error) {
             console.error('[BookingChargesService] Error adding charge:', error)
             throw error
@@ -119,29 +135,51 @@ class BookingChargesService {
      */
     async updateCharge(chargeId: string, data: UpdateChargeData): Promise<BookingCharge | null> {
         try {
-            const existingCharge = await db.bookingCharges.get(chargeId)
-            if (!existingCharge) throw new Error('Charge not found')
+            const { data: existing, error: fetchError } = await supabase
+                .from('booking_charges')
+                .select('*')
+                .eq('id', chargeId)
+                .single()
+            if (fetchError || !existing) throw new Error('Charge not found')
 
-            const booking = await db.bookings.get(existingCharge.bookingId)
+            const { data: booking } = await supabase
+                .from('bookings')
+                .select('status')
+                .eq('id', existing.booking_id)
+                .single()
             if (booking?.status === 'checked-out') {
                 throw new Error('Cannot edit charges for a checked-out booking')
             }
 
-            const quantity = data.quantity ?? existingCharge.quantity
-            const unitPrice = data.unitPrice ?? existingCharge.unitPrice
+            const quantity = data.quantity ?? existing.quantity
+            const unitPrice = data.unitPrice ?? existing.unit_price
             const amount = quantity * unitPrice
 
-            const { paymentMethod: _pm, notes: _n, ...rest } = data  // strip from spread
-            const updated = await db.bookingCharges.update(chargeId, {
-                ...rest,
-                notes: data.notes !== undefined ? (data.notes || null) : existingCharge.notes,
-                paymentMethod: data.paymentMethod || existingCharge.paymentMethod || 'cash',
-                amount,
-                updatedAt: new Date().toISOString()
-            })
+            const { data: updated, error: updateError } = await supabase
+                .from('booking_charges')
+                .update({
+                    description: data.description !== undefined ? data.description : existing.description,
+                    category: data.category !== undefined ? data.category : existing.category,
+                    quantity,
+                    unit_price: unitPrice,
+                    amount,
+                    notes: data.notes !== undefined ? (data.notes || null) : existing.notes,
+                    payment_method: data.paymentMethod || existing.payment_method || 'cash',
+                    updated_at: new Date().toISOString()
+                })
+                .eq('id', chargeId)
+                .select()
+                .single()
+
+            if (updateError) throw updateError
 
             console.log('[BookingChargesService] Charge updated:', chargeId)
-            return enrichCharge(updated)
+            return enrichCharge({
+                id: updated.id, bookingId: updated.booking_id, description: updated.description,
+                category: updated.category, quantity: updated.quantity, unitPrice: updated.unit_price,
+                amount: updated.amount, notes: updated.notes, paymentMethod: updated.payment_method,
+                createdBy: updated.created_by, createdAt: updated.created_at, updatedAt: updated.updated_at,
+            })
         } catch (error) {
             console.error('[BookingChargesService] Error updating charge:', error)
             throw error
@@ -153,15 +191,28 @@ class BookingChargesService {
      */
     async deleteCharge(chargeId: string): Promise<boolean> {
         try {
-            const existingCharge = await db.bookingCharges.get(chargeId)
-            if (!existingCharge) throw new Error('Charge not found')
+            const { data: existing, error: fetchError } = await supabase
+                .from('booking_charges')
+                .select('booking_id')
+                .eq('id', chargeId)
+                .single()
+            if (fetchError || !existing) throw new Error('Charge not found')
 
-            const booking = await db.bookings.get(existingCharge.bookingId)
+            const { data: booking } = await supabase
+                .from('bookings')
+                .select('status')
+                .eq('id', existing.booking_id)
+                .single()
             if (booking?.status === 'checked-out') {
                 throw new Error('Cannot delete charges for a checked-out booking')
             }
 
-            await db.bookingCharges.delete(chargeId)
+            const { error: deleteError } = await supabase
+                .from('booking_charges')
+                .delete()
+                .eq('id', chargeId)
+            if (deleteError) throw deleteError
+
             console.log('[BookingChargesService] Charge deleted:', chargeId)
             return true
         } catch (error) {
@@ -182,8 +233,12 @@ class BookingChargesService {
         const charges = await this.getChargesForBooking(bookingId)
         const totalCharges = charges.reduce((sum, c) => sum + (c.amount || 0), 0)
 
-        const booking = await db.bookings.get(bookingId)
-        const roomCost = booking?.totalPrice || 0
+        const { data: booking } = await supabase
+            .from('bookings')
+            .select('total_price, final_amount')
+            .eq('id', bookingId)
+            .single()
+        const roomCost = Number(booking?.final_amount) || Number(booking?.total_price) || 0
 
         return {
             charges,

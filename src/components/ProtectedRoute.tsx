@@ -4,7 +4,7 @@ import { useStaffRole } from '@/hooks/use-staff-role'
 import { canAccessRoute, ROUTE_ACCESS } from '@/lib/rbac'
 import { toast } from 'sonner'
 import { Loader2 } from 'lucide-react'
-import { blink } from '@/blink/client'
+import { supabase } from '@/lib/supabase'
 
 interface ProtectedRouteProps {
   children: ReactNode
@@ -67,7 +67,7 @@ export function ProtectedRoute({ children }: ProtectedRouteProps) {
     if (userId && !role && retryCount >= 3) {
       console.log('⚠️ [ProtectedRoute] No role found after retries, checking if admin user')
       // For admin users, allow access even if role detection fails
-      blink.auth.me().then(user => {
+      supabase.auth.getUser().then(({ data: { user } }) => {
         if (user?.email === import.meta.env.VITE_ADMIN_EMAIL) {
           console.log('✅ [ProtectedRoute] Admin user detected, allowing access without role')
           setHasChecked(true)

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { blink } from '../../blink/client'
+import { supabase } from '../../lib/supabase'
 import { activityLogService } from '@/services/activity-log-service'
 import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
@@ -18,11 +18,9 @@ export function AuthPage() {
 
   // Check auth state but don't auto-redirect - require manual login
   useEffect(() => {
-    const unsubscribe = blink.auth.onAuthStateChanged((state) => {
-      // Don't auto-redirect - let user manually authenticate
-      // This ensures explicit login process
-    })
-    return unsubscribe
+    // Auth state monitoring - no auto-redirect, explicit login only
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, _session) => {})
+    return () => subscription.unsubscribe()
   }, [])
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -33,24 +31,24 @@ export function AuthPage() {
       console.log('🚀 [AuthPage] Starting optimized authentication...')
       
       if (mode === 'signin') {
-        await blink.auth.signInWithEmail(email, password)
+        const { error: signInError } = await supabase.auth.signInWithPassword({ email, password })
+        if (signInError) throw signInError
         console.log('✅ [AuthPage] Sign in successful')
-        
-        // Initialize activity logging with current user
-        const user = await blink.auth.me()
+
+        const { data: { user } } = await supabase.auth.getUser()
         if (user) {
           activityLogService.setCurrentUser(user.id)
-          // Log the login activity
           await activityLogService.logUserLogin(user.id, {
             email: user.email,
-            role: 'staff', // Will be updated by role detection
+            role: 'staff',
           }).catch(err => console.error('Failed to log login activity:', err))
         }
-        
+
         toast.success('Welcome back!')
         navigate('/staff/dashboard', { replace: true })
       } else {
-        await blink.auth.signUp({ email, password })
+        const { error: signUpError } = await supabase.auth.signUp({ email, password })
+        if (signUpError) throw signUpError
         console.log('✅ [AuthPage] Sign up successful')
         toast.success('Account created successfully!')
         navigate('/staff/dashboard', { replace: true })

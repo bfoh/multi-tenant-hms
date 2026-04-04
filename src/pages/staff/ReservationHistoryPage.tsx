@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { blink } from '@/blink/client'
+import { supabase } from '@/lib/supabase'
 import { CalendarPlus, UserPlus, Loader2, FileText, Users, Mail, CreditCard, CheckCircle, XCircle } from 'lucide-react'
 import { format, parseISO, isToday } from 'date-fns'
 import { toast } from 'sonner'
@@ -91,21 +91,19 @@ export function ReservationHistoryPage() {
         setLoading(true)
         
         // Fetch all relevant data from database with reduced limits for better performance
-        const db = blink.db as any
-        const [bookingsData, guestsData, invoicesData, staffData, contactData] = await Promise.all([
-          db.bookings.list({ orderBy: { createdAt: 'desc' }, limit: 50 }).catch(() => []),
-          db.guests.list({ orderBy: { createdAt: 'desc' }, limit: 50 }).catch(() => []),
-          db.invoices.list({ orderBy: { createdAt: 'desc' }, limit: 50 }).catch(() => []),
-          db.staff.list({ orderBy: { createdAt: 'desc' }, limit: 50 }).catch(() => []),
-          db.contact_messages.list({ orderBy: { createdAt: 'desc' }, limit: 50 }).catch(() => [])
+        const [bookingsResult, guestsResult, staffResult] = await Promise.all([
+          supabase.from('bookings').select('*').order('created_at', { ascending: false }).limit(50),
+          supabase.from('guests').select('id, name, email').order('created_at', { ascending: false }).limit(50),
+          supabase.from('staff').select('id, user_id, name').order('created_at', { ascending: false }).limit(50),
         ])
+        const bookingsData = (bookingsResult.data || []).map((b: any) => ({ ...b, guestId: b.guest_id, checkIn: b.check_in, checkOut: b.check_out, totalPrice: b.total_price, createdAt: b.created_at }))
+        const guestsData = guestsResult.data || []
+        const invoicesData: any[] = []
+        const contactData: any[] = []
+        const staffData = (staffResult.data || []).map((s: any) => ({ ...s, userId: s.user_id }))
 
-        // Fetch activity logs to show booking deletions and other activities
-        const activityLogsData = await db.contact_messages.list({
-          where: { status: 'activity_log' },
-          orderBy: { createdAt: 'desc' },
-          limit: 50
-        }).catch(() => [])
+        // Fetch activity logs
+        const activityLogsData: any[] = []
 
         const allActivities: Activity[] = []
 

@@ -3,7 +3,7 @@ import { Suspense, lazy, useEffect, useState } from 'react'
 import { Toaster } from 'sonner'
 import { Navbar } from './components/Navbar'
 import { Footer } from './components/Footer'
-import { blink } from './blink/client'
+import { supabase } from './lib/supabase'
 import { initializeDatabaseSchema } from './blink/database-schema'
 import { activityLogService } from './services/activity-log-service'
 import { StaffLoginPage } from './pages/staff/StaffLoginPage'
@@ -78,7 +78,7 @@ function App() {
 
         console.log('📝 Initializing activity log service...')
         try {
-          const currentUser = await blink.auth.me()
+          const { data: { user: currentUser } } = await supabase.auth.getUser()
           if (currentUser) {
             activityLogService.setCurrentUser(currentUser.id)
             console.log('✅ Activity log service initialized with user:', currentUser.email)
@@ -100,7 +100,7 @@ function App() {
   useEffect(() => {
     const checkAuthStatus = async () => {
       try {
-        const currentUser = await blink.auth.me()
+        const { data: { user: currentUser } } = await supabase.auth.getUser()
         if (currentUser) {
           activityLogService.setCurrentUser(currentUser.id)
           console.log('📝 [App] Activity log service updated with user:', currentUser.email)
@@ -126,16 +126,16 @@ function App() {
       if (isCreating) return
       try {
         isCreating = true
-        const existingStaff = await (blink.db as any).staff.list({ where: { userId } })
+        const { data: existingStaff } = await supabase.from('staff').select('id').eq('user_id', userId).limit(1)
 
         if (!existingStaff || existingStaff.length === 0) {
-          await (blink.db as any).staff.create({
+          await supabase.from('staff').insert({
             id: `staff_admin_${Date.now()}`,
-            userId,
+            user_id: userId,
             name: 'Admin User',
             email,
             role: 'admin',
-            createdAt: new Date().toISOString()
+            created_at: new Date().toISOString()
           })
         }
       } catch (error) {
@@ -145,13 +145,14 @@ function App() {
       }
     }
 
-    const unsubscribe = blink.auth.onAuthStateChanged(async (state) => {
-      if (!state.isLoading && state.user?.email === import.meta.env.VITE_ADMIN_EMAIL && state.user?.id) {
-        await ensureAdminStaffRecord(state.user.id, state.user.email)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      const user = session?.user
+      if (user?.email === import.meta.env.VITE_ADMIN_EMAIL && user?.id) {
+        await ensureAdminStaffRecord(user.id, user.email)
       }
     })
 
-    return unsubscribe
+    return () => subscription.unsubscribe()
   }, [])
 
   return (

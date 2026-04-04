@@ -4,7 +4,7 @@
  * and attendance record management.
  */
 
-import { blink } from '@/blink/client'
+import { supabase } from '@/lib/supabase'
 
 // ─── Rotating QR Token ────────────────────────────────────────────────────────
 
@@ -215,7 +215,53 @@ export interface AttendanceRecord {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const db = blink.db as any
+function _ccAtt(r: any): AttendanceRecord {
+  return {
+    id: r.id,
+    staffId: r.staff_id ?? r.staffId ?? '',
+    staffName: r.staff_name ?? r.staffName ?? '',
+    date: r.date,
+    clockIn: r.clock_in ?? r.clockIn ?? '',
+    clockOut: r.clock_out ?? r.clockOut ?? '',
+    hoursWorked: r.hours_worked ?? r.hoursWorked ?? 0,
+    status: r.status,
+    notes: r.notes ?? '',
+    createdAt: r.created_at ?? r.createdAt ?? '',
+  }
+}
+
+const db = {
+  hr_attendance: {
+    list: async (opts?: { limit?: number }) => {
+      const { data } = await supabase.from('hr_attendance').select('*').limit(opts?.limit || 500)
+      return (data || []).map(_ccAtt)
+    },
+    create: async (record: AttendanceRecord) => {
+      const { error } = await supabase.from('hr_attendance').insert({
+        id: record.id,
+        staff_id: record.staffId,
+        staff_name: record.staffName,
+        date: record.date,
+        clock_in: record.clockIn,
+        clock_out: record.clockOut,
+        hours_worked: record.hoursWorked,
+        status: record.status,
+        notes: record.notes,
+        created_at: record.createdAt,
+      })
+      if (error) throw error
+    },
+    update: async (id: string, record: Partial<AttendanceRecord>) => {
+      const payload: Record<string, any> = {}
+      if (record.clockOut !== undefined) payload.clock_out = record.clockOut
+      if (record.hoursWorked !== undefined) payload.hours_worked = record.hoursWorked
+      if (record.notes !== undefined) payload.notes = record.notes
+      if (record.status !== undefined) payload.status = record.status
+      const { error } = await supabase.from('hr_attendance').update(payload).eq('id', id)
+      if (error) throw error
+    },
+  },
+}
 
 function todayStr(): string {
   return new Date().toISOString().split('T')[0]

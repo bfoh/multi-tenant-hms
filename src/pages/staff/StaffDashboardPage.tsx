@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { blink } from '@/blink/client'
+import { supabase } from '@/lib/supabase'
 import { Booking, Room } from '@/types'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -12,7 +12,7 @@ import { StaffSidebar } from '@/components/layout/StaffSidebar'
 import { bookingEngine } from '@/services/booking-engine'
 
 export function StaffDashboardPage() {
-  const db = (blink.db as any)
+  // (db shim removed — use supabase directly below)
   const { currency } = useCurrency()
   const navigate = useNavigate()
   const [user, setUser] = useState<any>(null)
@@ -22,13 +22,15 @@ export function StaffDashboardPage() {
   const [conflicts, setConflicts] = useState(0)
 
   useEffect(() => {
-    const unsubscribe = blink.auth.onAuthStateChanged((state) => {
-      setUser(state.user)
-      if (!state.user && !state.isLoading) {
-        navigate('/staff')
-      }
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      setUser(user)
+      if (!user) navigate('/staff')
     })
-    return unsubscribe
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user || null)
+      if (!session?.user) navigate('/staff')
+    })
+    return () => subscription.unsubscribe()
   }, [navigate])
 
   useEffect(() => {
@@ -39,12 +41,12 @@ export function StaffDashboardPage() {
 
   const loadData = async () => {
     try {
-      const [bookingsData, roomsData] = await Promise.all([
-        db.bookings.list({ orderBy: { createdAt: 'desc' }, limit: 100 }),
-        db.rooms.list({ orderBy: { createdAt: 'desc' }, limit: 200 })
+      const [bookingsResult, roomsResult] = await Promise.all([
+        supabase.from('bookings').select('*').order('created_at', { ascending: false }).limit(100),
+        supabase.from('rooms').select('*').order('room_number').limit(200)
       ])
-      setBookings(bookingsData)
-      setRooms(roomsData)
+      setBookings((bookingsResult.data || []).map((b: any) => ({ ...b, id: b.id, checkIn: b.check_in, checkOut: b.check_out, totalPrice: b.total_price })))
+      setRooms((roomsResult.data || []).map((r: any) => ({ ...r, id: r.id, roomNumber: r.room_number })))
       const conflictsList = await bookingEngine.getConflictedBookings()
       setConflicts(conflictsList.length)
     } catch (error) {
@@ -55,7 +57,7 @@ export function StaffDashboardPage() {
   }
 
   const handleLogout = async () => {
-    await blink.auth.logout()
+    await supabase.auth.signOut()
     navigate('/staff')
   }
 

@@ -1,5 +1,56 @@
-import { blink } from '@/blink/client'
+import { supabase } from '@/lib/supabase'
 import { bookingEngine } from './booking-engine'
+
+const _analyticsDb = {
+  roomTypes: {
+    list: async () => {
+      const { data } = await supabase.from('room_types').select('*').limit(100)
+      return (data || []).map((r: any) => ({ ...r, basePrice: r.base_price }))
+    },
+  },
+  properties: {
+    list: async () => {
+      const { data } = await supabase.from('rooms').select('*').limit(500)
+      return (data || []).map((r: any) => ({
+        ...r,
+        roomNumber: r.room_number,
+        propertyTypeId: r.room_type_id,
+        status: r.status === 'available' ? 'active' : r.status,
+      }))
+    },
+  },
+  bookingCharges: {
+    list: async (opts?: { limit?: number }) => {
+      const { data } = await supabase.from('booking_charges').select('*').limit(opts?.limit || 5000)
+      return (data || []).map((c: any) => ({
+        ...c,
+        bookingId: c.booking_id,
+        unitPrice: c.unit_price,
+        paymentMethod: c.payment_method,
+        createdBy: c.created_by,
+        createdAt: c.created_at,
+      }))
+    },
+  },
+  guests: {
+    list: async () => {
+      const { data } = await supabase.from('guests').select('*').limit(5000)
+      return (data || []).map((g: any) => ({ ...g, createdAt: g.created_at }))
+    },
+  },
+  rooms: {
+    list: async () => {
+      const { data } = await supabase.from('rooms').select('*').limit(500)
+      return data || []
+    },
+  },
+  invoices: {
+    list: async () => {
+      // No standalone invoices table; return empty to avoid errors
+      return []
+    },
+  },
+}
 import { startOfWeek, endOfWeek, endOfMonth, endOfYear } from 'date-fns'
 import { standaloneSalesService } from './standalone-sales-service'
 import type {
@@ -27,7 +78,7 @@ class AnalyticsService {
   ): Promise<RevenueAnalytics> {
     try {
       const bookings = await bookingEngine.getAllBookings()
-      const db = blink.db as any
+      const db = _analyticsDb
       const [roomTypes, properties, allChargesRaw, allStandaloneSales] = await Promise.all([
         db.roomTypes.list(),
         db.properties.list(),
@@ -438,7 +489,7 @@ class AnalyticsService {
   async getOccupancyAnalytics(): Promise<OccupancyAnalytics> {
     try {
       const bookings = await bookingEngine.getAllBookings()
-      const db = blink.db as any
+      const db = _analyticsDb
       const [properties, roomTypes] = await Promise.all([
         db.properties.list(),
         db.roomTypes.list()
@@ -620,7 +671,7 @@ class AnalyticsService {
    */
   async getGuestAnalytics(): Promise<GuestAnalytics> {
     try {
-      const db = blink.db as any
+      const db = _analyticsDb
       const guests = await db.guests.list()
       const bookings = await bookingEngine.getAllBookings()
 
@@ -826,7 +877,7 @@ class AnalyticsService {
         : 0
 
       // Room status distribution (placeholder - implement when housekeeping data available)
-      const db = blink.db as any
+      const db = _analyticsDb
       const rooms = await db.rooms.list()
 
       const roomStatusDistribution = {
@@ -864,7 +915,7 @@ class AnalyticsService {
    */
   async getFinancialAnalytics(): Promise<FinancialAnalytics> {
     try {
-      const db = blink.db as any
+      const db = _analyticsDb
       const [invoices, revenueAnalytics] = await Promise.all([
         db.invoices.list(),
         this.getRevenueAnalytics()

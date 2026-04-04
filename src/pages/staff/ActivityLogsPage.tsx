@@ -8,7 +8,7 @@ import { Loader2, Download, Filter, Search, Calendar, User, FileText, RefreshCw 
 import { activityLogService, type ActivityLog, type ActivityAction, type EntityType } from '@/services/activity-log-service'
 import { format } from 'date-fns'
 import { toast } from 'sonner'
-import { blink } from '@/blink/client'
+import { supabase } from '@/lib/supabase'
 // Removed test utility imports - no longer needed
 
 export function ActivityLogsPage() {
@@ -99,11 +99,10 @@ export function ActivityLogsPage() {
 
   async function loadUsers() {
     try {
-      const db = blink.db as any
-      const staffList = await db.staff.list({ limit: 100 })
-      setUsers(staffList.map((s: any) => ({
-        id: s.userId || s.id,
-        name: s.name || s.email || 'Unknown User'
+      const { data: staffList } = await supabase.from('staff').select('id, user_id, name').limit(100)
+      setUsers((staffList || []).map((s: any) => ({
+        id: s.user_id || s.id,
+        name: s.name || 'Unknown User'
       })))
     } catch (error) {
       console.error('Failed to load users:', error)

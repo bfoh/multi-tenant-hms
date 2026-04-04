@@ -28,7 +28,7 @@ import { usePermissions } from '@/hooks/use-permissions'
 import { analyticsService } from '@/services/analytics-service'
 import { AnalyticsExportService } from '@/services/analytics-export-service'
 import { bookingEngine } from '@/services/booking-engine'
-import { blink } from '@/blink/client'
+import { supabase } from '@/lib/supabase'
 import { standaloneSalesService } from '@/services/standalone-sales-service'
 import {
   startOfWeek, endOfWeek, format,
@@ -120,7 +120,7 @@ export function AnalyticsPage() {
           analyticsService.getGuestAnalytics(),
           analyticsService.getPerformanceMetrics(),
           bookingEngine.getAllBookings(),
-          (blink.db as any).bookingCharges.list({ limit: 5000 }).catch(() => []),
+          supabase.from('booking_charges').select('*').limit(5000).then(r => (r.data || []).map((c: any) => ({ ...c, bookingId: c.booking_id, unitPrice: c.unit_price, paymentMethod: c.payment_method }))).catch(() => []),
           standaloneSalesService.getAllSales().catch(() => []),
         ])
       setRevenue(revenueData)

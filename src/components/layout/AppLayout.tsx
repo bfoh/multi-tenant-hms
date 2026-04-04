@@ -31,7 +31,7 @@ import {
   Users2,
   Wallet
 } from 'lucide-react'
-import { blink } from '../../blink/client'
+import { supabase } from '../../lib/supabase'
 import { cn } from '../../lib/utils'
 import { useStaffRole } from '../../hooks/use-staff-role'
 
@@ -67,7 +67,7 @@ export function AppLayout() {
   useEffect(() => {
     const getUser = async () => {
       try {
-        const user = await blink.auth.me()
+        const { data: { user } } = await supabase.auth.getUser()
         setCurrentUser(user)
         console.log('🎨 [AppLayout] Current user:', user?.email)
 
@@ -128,7 +128,7 @@ export function AppLayout() {
   const handleLogout = async () => {
     try {
       // Log the logout activity before signing out
-      const user = await blink.auth.me()
+      const { data: { user } } = await supabase.auth.getUser()
       if (user) {
         await activityLogService.logUserLogout(user.id, { email: user.email }).catch(err =>
           console.error('Failed to log logout activity:', err)
@@ -138,7 +138,7 @@ export function AppLayout() {
       console.error('Failed to get current user for logout logging:', error)
     }
 
-    await blink.auth.logout()
+    await supabase.auth.signOut()
   }
 
   // Functions to preserve scroll position when dropdowns open

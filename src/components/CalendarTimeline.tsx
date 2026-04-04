@@ -21,7 +21,7 @@ import {
   DialogTitle,
 } from './ui/dialog'
 import { toast } from 'sonner'
-import { blink } from '../blink/client'
+import { supabase } from '../lib/supabase'
 import { CheckInDialog } from '@/components/dialogs/CheckInDialog'
 import { CheckOutDialog } from '@/components/dialogs/CheckOutDialog'
 import { ExtendStayDialog } from '@/components/dialogs/ExtendStayDialog'
@@ -296,7 +296,6 @@ export function CalendarTimeline({
     setProcessing(true)
     try {
       const remoteId = booking.remoteId || booking.id
-      const db = blink.db as any
 
       // Use booking engine to handle status update, timestamps, room status, logs, and cleanup tasks
       await bookingEngine.updateBookingStatus(remoteId, 'checked-out')
@@ -307,9 +306,8 @@ export function CalendarTimeline({
       let room: any = null
 
       if (roomId) {
-        const rooms = await db.rooms.list({ limit: 500 })
-        room = rooms.find((r: any) => r.id === roomId)
-        if (room) roomNumber = room.roomNumber || 'N/A'
+        const { data: roomData } = await supabase.from('rooms').select('id, room_number, room_type_id').eq('id', roomId).maybeSingle()
+        if (roomData) { room = { ...roomData, roomNumber: roomData.room_number }; roomNumber = roomData.room_number || 'N/A' }
       }
 
       // Generate and send invoice
@@ -352,8 +350,7 @@ export function CalendarTimeline({
 
         // IMPORTANT: Save the invoice number to the booking record for consistency
         try {
-          const db = blink.db as any
-          await db.bookings.update(bookingWithDetails.id, { invoiceNumber: invoiceData.invoiceNumber })
+          await supabase.from('bookings').update({ invoice_number: invoiceData.invoiceNumber }).eq('id', bookingWithDetails.id)
           console.log('✅ [CalendarTimeline] Invoice number saved to booking:', invoiceData.invoiceNumber)
         } catch (saveError) {
           console.error('⚠️ [CalendarTimeline] Failed to save invoice number:', saveError)

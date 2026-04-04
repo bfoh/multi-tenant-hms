@@ -16,7 +16,7 @@ import {
 import { toast } from 'sonner'
 import { format } from 'date-fns'
 import { createInvoiceData, downloadInvoicePDF, printInvoice, createPreInvoiceData, downloadPreInvoicePDF, printPreInvoice, PreInvoiceData, createGroupInvoiceData, downloadGroupInvoicePDF } from '@/services/invoice-service'
-import { blink } from '@/blink/client'
+import { supabase } from '@/lib/supabase'
 import { supabase } from '@/lib/supabase'
 
 interface InvoiceRecord {
@@ -187,11 +187,11 @@ export function StaffInvoiceManager() {
     if (!invoice.groupId) return;
     setDownloading(invoice.id);
     try {
-      const db = blink.db as any;
       console.log('📥 [StaffInvoiceManager] Downloading GROUP invoice for group:', invoice.groupId);
 
       // Fetch enough bookings to find the group members
-      const recentBookings = await db.bookings.list({ limit: 500, orderBy: { createdAt: 'desc' } });
+      const { data: rawBookings } = await supabase.from('bookings').select('*').limit(500).order('created_at', { ascending: false });
+      const recentBookings = (rawBookings || []).map((b: any) => ({ ...b, guestId: b.guest_id, roomId: b.room_id, checkIn: b.check_in, checkOut: b.check_out, totalPrice: b.total_price, specialRequests: b.special_requests, groupId: b.group_id }));
 
       // Hydrate and filter
       const groupBookingsRaw = recentBookings.filter((b: any) => {
@@ -211,10 +211,12 @@ export function StaffInvoiceManager() {
       const guestIds = [...new Set(groupBookingsRaw.map((b: any) => b.guestId))];
       const roomIds = [...new Set(groupBookingsRaw.map((b: any) => b.roomId))];
 
-      const [guests, rooms] = await Promise.all([
-        db.guests.list({ where: { id: { in: guestIds } } }),
-        db.rooms.list({ where: { id: { in: roomIds } } })
+      const [guestsRes, roomsRes] = await Promise.all([
+        supabase.from('guests').select('*').in('id', guestIds as string[]),
+        supabase.from('rooms').select('*').in('id', roomIds as string[])
       ]);
+      const guests = (guestsRes.data || []);
+      const rooms = (roomsRes.data || []).map((r: any) => ({ ...r, roomNumber: r.room_number, roomType: r.room_type_id }));
 
       const guestMap = new Map(guests.map((g: any) => [g.id, g]));
       const roomMap = new Map(rooms.map((r: any) => [r.id, r]));
@@ -262,21 +264,22 @@ export function StaffInvoiceManager() {
     try {
       console.log('📥 [StaffInvoiceManager] Downloading invoice for booking:', invoice.id, 'isPreInvoice:', invoice.isPreInvoice)
 
-      const db = blink.db as any
-
       // Fetch the actual booking data
-      const booking = await db.bookings.get(invoice.id)
-      if (!booking) {
+      const { data: bookingRaw } = await supabase.from('bookings').select('*').eq('id', invoice.id).maybeSingle()
+      if (!bookingRaw) {
         throw new Error('Booking not found')
       }
+      const booking = { ...bookingRaw, guestId: bookingRaw.guest_id, roomId: bookingRaw.room_id, checkIn: bookingRaw.check_in, checkOut: bookingRaw.check_out, totalPrice: bookingRaw.total_price }
 
       // Fetch guest and room data
-      const [guest, room] = await Promise.all([
-        db.guests.get(booking.guestId),
-        db.rooms.get(booking.roomId)
+      const [guestRes, roomRes] = await Promise.all([
+        supabase.from('guests').select('*').eq('id', booking.guestId).maybeSingle(),
+        supabase.from('rooms').select('*').eq('id', booking.roomId).maybeSingle()
       ])
+      const guest = guestRes.data
+      const roomData = roomRes.data ? { ...roomRes.data, roomNumber: roomRes.data.room_number, roomType: roomRes.data.room_type_id } : null
 
-      if (!guest || !room) {
+      if (!guest || !roomData) {
         throw new Error('Guest or room data not found')
       }
 
@@ -285,21 +288,21 @@ export function StaffInvoiceManager() {
         ...booking,
         guest: guest,
         room: {
-          roomNumber: room.roomNumber,
-          roomType: room.roomType || 'Standard Room'
+          roomNumber: roomData.roomNumber,
+          roomType: roomData.roomType || 'Standard Room'
         }
       }
 
       if (invoice.isPreInvoice || invoice.invoiceNumber.startsWith('PRE-')) {
         // Use pre-invoice generation for confirmed bookings
         console.log('📋 [StaffInvoiceManager] Using PRE-INVOICE template')
-        const preInvoiceData = await createPreInvoiceData(bookingWithDetails, room)
+        const preInvoiceData = await createPreInvoiceData(bookingWithDetails, roomData)
         preInvoiceData.invoiceNumber = invoice.invoiceNumber
         await downloadPreInvoicePDF(preInvoiceData)
         toast.success(`Pre-Invoice ${invoice.invoiceNumber} downloaded successfully!`)
       } else {
         // Use regular invoice for paid/checked-out bookings
-        const invoiceData = await createInvoiceData(bookingWithDetails, room)
+        const invoiceData = await createInvoiceData(bookingWithDetails, roomData)
         invoiceData.invoiceNumber = invoice.invoiceNumber
         await downloadInvoicePDF(invoiceData)
         toast.success(`Invoice ${invoice.invoiceNumber} downloaded successfully!`)
@@ -317,21 +320,22 @@ export function StaffInvoiceManager() {
     try {
       console.log('🖨️ [StaffInvoiceManager] Printing invoice for booking:', invoice.id, 'isPreInvoice:', invoice.isPreInvoice)
 
-      const db = blink.db as any
-
       // Fetch the actual booking data
-      const booking = await db.bookings.get(invoice.id)
-      if (!booking) {
+      const { data: bookingRaw2 } = await supabase.from('bookings').select('*').eq('id', invoice.id).maybeSingle()
+      if (!bookingRaw2) {
         throw new Error('Booking not found')
       }
+      const booking = { ...bookingRaw2, guestId: bookingRaw2.guest_id, roomId: bookingRaw2.room_id, checkIn: bookingRaw2.check_in, checkOut: bookingRaw2.check_out, totalPrice: bookingRaw2.total_price }
 
       // Fetch guest and room data
-      const [guest, room] = await Promise.all([
-        db.guests.get(booking.guestId),
-        db.rooms.get(booking.roomId)
+      const [guestRes2, roomRes2] = await Promise.all([
+        supabase.from('guests').select('*').eq('id', booking.guestId).maybeSingle(),
+        supabase.from('rooms').select('*').eq('id', booking.roomId).maybeSingle()
       ])
+      const guest = guestRes2.data
+      const roomData = roomRes2.data ? { ...roomRes2.data, roomNumber: roomRes2.data.room_number, roomType: roomRes2.data.room_type_id } : null
 
-      if (!guest || !room) {
+      if (!guest || !roomData) {
         throw new Error('Guest or room data not found')
       }
 
@@ -340,21 +344,21 @@ export function StaffInvoiceManager() {
         ...booking,
         guest: guest,
         room: {
-          roomNumber: room.roomNumber,
-          roomType: room.roomType || 'Standard Room'
+          roomNumber: roomData.roomNumber,
+          roomType: roomData.roomType || 'Standard Room'
         }
       }
 
       if (invoice.isPreInvoice || invoice.invoiceNumber.startsWith('PRE-')) {
         // Use same pre-invoice template as download
         console.log('📋 [StaffInvoiceManager] Using PRE-INVOICE template for printing')
-        const preInvoiceData = await createPreInvoiceData(bookingWithDetails, room)
+        const preInvoiceData = await createPreInvoiceData(bookingWithDetails, roomData)
         preInvoiceData.invoiceNumber = invoice.invoiceNumber
         await printPreInvoice(preInvoiceData)
         toast.success(`Pre-Invoice ${invoice.invoiceNumber} sent to printer!`)
       } else {
         // Use regular invoice template for paid invoices
-        const invoiceData = await createInvoiceData(bookingWithDetails, room)
+        const invoiceData = await createInvoiceData(bookingWithDetails, roomData)
         invoiceData.invoiceNumber = invoice.invoiceNumber
         await printInvoice(invoiceData)
         toast.success(`Invoice ${invoice.invoiceNumber} sent to printer!`)

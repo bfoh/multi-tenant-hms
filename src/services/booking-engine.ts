@@ -1,4 +1,4 @@
-import { blink, isOnline, syncQueue } from '../blink/client'
+import { supabase } from '../lib/supabase'
 import { v4 as uuidv4 } from 'uuid'
 import { activityLogService } from './activity-log-service'
 import { sendBookingConfirmation } from './notifications'
@@ -87,6 +87,71 @@ export interface AuditLog {
   timestamp: string
 }
 
+// ─── Supabase-backed db shim ─────────────────────────────────────────────────
+// Replaces blink.db — returns camelCase objects just like the old Blink SDK.
+function _snake(s: string) { return s.replace(/([A-Z])/g, m => `_${m.toLowerCase()}`) }
+function _camel(s: string) { return s.replace(/_([a-z])/g, (_, c) => c.toUpperCase()) }
+function _toCamel(row: any): any {
+  if (!row || typeof row !== 'object' || Array.isArray(row)) return row
+  const r: any = {}
+  for (const k of Object.keys(row)) r[_camel(k)] = row[k]
+  return r
+}
+function _toSnake(obj: any): any {
+  if (!obj || typeof obj !== 'object') return obj
+  const r: any = {}
+  for (const k of Object.keys(obj)) r[_snake(k)] = obj[k]
+  return r
+}
+const _TABLE: Record<string, string> = {
+  bookings: 'bookings', guests: 'guests', rooms: 'rooms',
+  roomTypes: 'room_types', housekeepingTasks: 'housekeeping_tasks',
+  properties: 'rooms', // no separate properties table post-migration
+}
+function _makeTable(name: string) {
+  const tbl = _TABLE[name] || _snake(name)
+  return {
+    async list(opts?: { where?: Record<string, any>; limit?: number }): Promise<any[]> {
+      let q: any = supabase.from(tbl).select('*')
+      if (opts?.where) {
+        for (const [k, v] of Object.entries(opts.where)) q = q.eq(_snake(k), v)
+      }
+      if (opts?.limit) q = q.limit(opts.limit)
+      const { data, error } = await q
+      if (error) throw error
+      return (data || []).map(_toCamel)
+    },
+    async get(id: string): Promise<any> {
+      const { data, error } = await supabase.from(tbl).select('*').eq('id', id).maybeSingle()
+      if (error) throw error
+      return data ? _toCamel(data) : null
+    },
+    async create(payload: Record<string, any>): Promise<any> {
+      const { data, error } = await supabase.from(tbl).insert(_toSnake(payload)).select().single()
+      if (error) throw error
+      return _toCamel(data)
+    },
+    async update(id: string, payload: Record<string, any>): Promise<any> {
+      const { data, error } = await supabase.from(tbl).update(_toSnake(payload)).eq('id', id).select().maybeSingle()
+      if (error) throw error
+      return data ? _toCamel(data) : null
+    },
+    async delete(id: string): Promise<void> {
+      const { error } = await supabase.from(tbl).delete().eq('id', id)
+      if (error) throw error
+    },
+  }
+}
+const _db = {
+  bookings: _makeTable('bookings'),
+  guests: _makeTable('guests'),
+  rooms: _makeTable('rooms'),
+  roomTypes: _makeTable('roomTypes'),
+  housekeepingTasks: _makeTable('housekeepingTasks'),
+  properties: _makeTable('properties'),
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 class BookingEngine {
   private syncHandlers: Array<(status: 'syncing' | 'synced' | 'error', message?: string) => void> = []
 
@@ -108,7 +173,7 @@ class BookingEngine {
 
   // Create a booking directly in Blink DB and return LocalBooking-shaped object for UI compatibility
   async createBooking(bookingData: Omit<LocalBooking, '_id' | 'createdAt' | 'updatedAt' | 'synced'>): Promise<LocalBooking> {
-    const db = blink.db as any
+    const db = _db
 
     console.log('[BookingEngine] Starting booking creation with data:', bookingData)
 
@@ -371,7 +436,7 @@ class BookingEngine {
     const remoteId = `booking-${suffix}`
 
     // Create booking remotely
-    const currentUser = await blink.auth.me().catch(() => null)
+    const currentUser = await supabase.auth.getUser().then(r => r.data.user).catch(() => null)
     console.log('[BookingEngine] Current user:', currentUser?.id || 'No user authenticated')
 
     // ROBUST METADATA EXTRACTION
@@ -739,7 +804,7 @@ class BookingEngine {
     groupId: string,
     bookingData: Omit<LocalBooking, '_id' | 'createdAt' | 'updatedAt' | 'synced'>
   ): Promise<LocalBooking> {
-    const db = blink.db as any
+    const db = _db
     console.log(`[BookingEngine] Adding new member to group: ${groupId}`)
 
     // Find existing bookings in this group to get group metadata
@@ -814,7 +879,7 @@ class BookingEngine {
    * If removing the primary booking, transfers primary status to another member
    */
   async removeFromGroup(bookingId: string): Promise<{ remainingCount: number; newPrimaryId?: string }> {
-    const db = blink.db as any
+    const db = _db
     console.log(`[BookingEngine] Removing booking from group: ${bookingId}`)
 
     // Find the booking
@@ -939,7 +1004,7 @@ class BookingEngine {
   // Delete a booking from the database
   async deleteBooking(id: string): Promise<void> {
     try {
-      const db = blink.db as any
+      const db = _db
       console.log('[BookingEngine] Delete booking requested for:', id)
 
       // Convert local-style ID to remote ID format if needed
@@ -1101,7 +1166,7 @@ class BookingEngine {
       }
 
       // Log the deletion activity (fire-and-forget - never block deletion)
-      const currentUser = await blink.auth.me().catch(() => null)
+      const currentUser = await supabase.auth.getUser().then(r => r.data.user).catch(() => null)
       activityLogService.log({
         action: 'deleted',
         entityType: 'booking',
@@ -1190,7 +1255,7 @@ class BookingEngine {
 
   // Map DB bookings to LocalBooking for Admin views
   async getAllBookings(): Promise<LocalBooking[]> {
-    const db = blink.db as any
+    const db = _db
     const [bookings, rooms, guests] = await Promise.all([
       db.bookings.list(),
       db.rooms.list(),
@@ -1428,7 +1493,7 @@ class BookingEngine {
   }
 
   async updateBookingStatus(remoteId: string, status: LocalBooking['status']) {
-    const db = blink.db as any
+    const db = _db
 
     console.log('[BookingEngine] updateBookingStatus called with:', { remoteId, status })
 
@@ -1461,7 +1526,7 @@ class BookingEngine {
 
       const guest = booking.guestId ? await db.guests.get(booking.guestId).catch(() => null) : null
       const room = booking.roomId ? await db.rooms.get(booking.roomId).catch(() => null) : null
-      const currentUser = await blink.auth.me().catch(() => null)
+      const currentUser = await supabase.auth.getUser().then(r => r.data.user).catch(() => null)
 
       // Update status
       // Prepare updates object
@@ -1662,7 +1727,7 @@ class BookingEngine {
   async clearAllData(): Promise<void> { return }
 
   async getEndOfDayReport(dateIso: string) {
-    const db = blink.db as any
+    const db = _db
     const target = new Date(dateIso)
     const startOfDay = new Date(target)
     startOfDay.setHours(0, 0, 0, 0)

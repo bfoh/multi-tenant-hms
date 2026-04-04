@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from 'react'
-import { blink } from '@/blink/client'
+import { supabase } from '@/lib/supabase'
 import { bookingEngine } from '@/services/booking-engine'
 import { formatCurrencySync } from '@/lib/utils'
 import { useCurrency } from '@/hooks/use-currency'
@@ -62,7 +62,70 @@ export function GroupManageDialog({
     onUpdate
 }: GroupManageDialogProps) {
     const { currency } = useCurrency()
-    const db = blink.db as any
+    const db = {
+        bookings: {
+            list: async ({ limit = 500 } = {}) => {
+                const { data } = await supabase.from('bookings').select('*').limit(limit)
+                return (data || []).map((b: any) => ({
+                    ...b,
+                    guestId: b.guest_id,
+                    roomId: b.room_id,
+                    checkIn: b.check_in,
+                    checkOut: b.check_out,
+                    totalPrice: b.total_price,
+                    specialRequests: b.special_requests,
+                }))
+            },
+            update: async (id: string, payload: Record<string, any>) => {
+                const snake: Record<string, any> = {}
+                if (payload.checkIn !== undefined) snake.check_in = payload.checkIn
+                if (payload.checkOut !== undefined) snake.check_out = payload.checkOut
+                if (payload.totalPrice !== undefined) snake.total_price = payload.totalPrice
+                await supabase.from('bookings').update(snake).eq('id', id)
+            },
+        },
+        rooms: {
+            list: async ({ limit = 500 } = {}) => {
+                const { data } = await supabase.from('rooms').select('*').limit(limit)
+                return (data || []).map((r: any) => ({
+                    ...r,
+                    roomNumber: r.room_number,
+                    roomTypeId: r.room_type_id,
+                }))
+            },
+        },
+        guests: {
+            list: async ({ limit = 500 } = {}) => {
+                const { data } = await supabase.from('guests').select('*').limit(limit)
+                return data || []
+            },
+            update: async (id: string, payload: Record<string, any>) => {
+                await supabase.from('guests').update(payload).eq('id', id)
+            },
+        },
+        roomTypes: {
+            list: async ({ limit = 100 } = {}) => {
+                const { data } = await supabase.from('room_types').select('*').limit(limit)
+                return (data || []).map((rt: any) => ({
+                    ...rt,
+                    basePrice: rt.base_price,
+                }))
+            },
+        },
+        properties: {
+            list: async ({ limit = 500 } = {}) => {
+                const { data } = await supabase.from('rooms').select('*').limit(limit)
+                return (data || []).map((r: any) => ({
+                    ...r,
+                    roomNumber: r.room_number,
+                    basePrice: r.price,
+                    propertyTypeId: r.room_type_id,
+                    name: r.name || r.room_type_id,
+                    status: r.status === 'available' ? 'active' : r.status,
+                }))
+            },
+        },
+    }
 
     // State
     const [loading, setLoading] = useState(true)

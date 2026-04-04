@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { blink } from '@/blink/client'
+import { supabase } from '@/lib/supabase'
 import type { StaffRole } from '@/lib/rbac'
 
 // Cache helper functions
@@ -102,40 +102,24 @@ export function useStaffRole() {
         return
       }
 
-      // Optimized single query with better error handling
-      let staff = await (blink.db as any).staff.list({
-        where: { userId: uid },
-        limit: 1,
-        include: ['user'] // Try to include user data in single query
-      })
+      // Look up staff record by user_id
+      let { data: staffRaw } = await supabase.from('staff').select('*').eq('user_id', uid).limit(1)
+      let staff = (staffRaw || []).map((s: any) => ({ ...s, userId: s.user_id }))
 
-      if (staff.length === 0) {
-        // Try snake_case version as fallback
-        staff = await (blink.db as any).staff.list({
-          where: { user_id: uid } as any,
-          limit: 1,
-          include: ['user']
-        })
-      }
-
-      // Fallback: Try looking up by email if userId lookup failed
+      // Fallback: try by email
       if (staff.length === 0) {
         console.log('🔍 [useStaffRole] userId lookup failed, trying email lookup...')
         try {
-          const currentUser = await blink.auth.me()
+          const { data: { user: currentUser } } = await supabase.auth.getUser()
           if (currentUser?.email) {
-            staff = await (blink.db as any).staff.list({
-              where: { email: currentUser.email },
-              limit: 1
-            })
+            const { data: byEmail } = await supabase.from('staff').select('*').eq('email', currentUser.email).limit(1)
+            staff = (byEmail || []).map((s: any) => ({ ...s, userId: s.user_id }))
 
-            // If found by email, update the userId in the staff record
             if (staff.length > 0 && staff[0].userId !== uid) {
               console.log('🔧 [useStaffRole] Updating staff record with correct userId...')
               try {
-                await (blink.db as any).staff.update(staff[0].id, { userId: uid })
+                await supabase.from('staff').update({ user_id: uid }).eq('id', staff[0].id)
                 staff[0].userId = uid
-                console.log('✅ [useStaffRole] Staff record userId updated successfully')
               } catch (updateError) {
                 console.warn('⚠️ [useStaffRole] Could not update staff userId:', updateError)
               }
@@ -184,11 +168,8 @@ export function useStaffRole() {
     const UNSET = '__unset__'
     let currentUserId: string | null = UNSET as any
 
-    const unsubscribe = blink.auth.onAuthStateChanged((state) => {
-      // Wait until auth has fully resolved before acting
-      if (state.isLoading) return
-
-      const newUserId = state.user?.id || null
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      const newUserId = session?.user?.id || null
 
       // Process whenever userId changes OR on the very first resolution
       if (newUserId !== currentUserId) {
@@ -224,7 +205,7 @@ export function useStaffRole() {
     window.addEventListener('refreshStaffRole', handleRefresh)
 
     return () => {
-      unsubscribe()
+      subscription.unsubscribe()
       window.removeEventListener('refreshStaffRole', handleRefresh)
     }
   }, [loadStaffRole])

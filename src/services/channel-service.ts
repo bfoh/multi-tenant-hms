@@ -1,9 +1,34 @@
-import { blink } from '@/blink/client'
+import { supabase } from '@/lib/supabase'
 import { ChannelConnection, ChannelRoomMapping, ExternalBooking } from '@/types'
+
+function _ccConn(r: any): ChannelConnection {
+    return {
+        id: r.id,
+        channelId: r.channel_id ?? r.channelId,
+        name: r.name,
+        isActive: r.is_active ?? r.isActive ?? false,
+        createdAt: r.created_at ?? r.createdAt,
+        updatedAt: r.updated_at ?? r.updatedAt,
+    }
+}
+
+function _ccMap(r: any): ChannelRoomMapping {
+    return {
+        id: r.id,
+        channelConnectionId: r.channel_connection_id ?? r.channelConnectionId,
+        localRoomTypeId: r.local_room_type_id ?? r.localRoomTypeId,
+        importUrl: r.import_url ?? r.importUrl,
+        exportToken: r.export_token ?? r.exportToken,
+        lastSyncedAt: r.last_synced_at ?? r.lastSyncedAt,
+        syncStatus: r.sync_status ?? r.syncStatus ?? 'pending',
+        syncMessage: r.sync_message ?? r.syncMessage,
+        createdAt: r.created_at ?? r.createdAt,
+        updatedAt: r.updated_at ?? r.updatedAt,
+    }
+}
 
 export class ChannelService {
     private static instance: ChannelService
-    private db = blink.db as any
 
     static getInstance(): ChannelService {
         if (!ChannelService.instance) {
@@ -16,9 +41,8 @@ export class ChannelService {
 
     async getConnections(): Promise<ChannelConnection[]> {
         try {
-            // Ensure we get all connections
-            const result = await this.db.channelConnections?.list({ limit: 50 }) || []
-            return result
+            const { data } = await supabase.from('channel_connections').select('*').limit(50)
+            return (data || []).map(_ccConn)
         } catch (error) {
             console.error('Failed to fetch channel connections:', error)
             return []
@@ -37,11 +61,21 @@ export class ChannelService {
 
     async createConnection(data: Partial<ChannelConnection>): Promise<ChannelConnection> {
         try {
-            return await this.db.channelConnections.create({
-                ...data,
-                createdAt: new Date().toISOString(),
-                updatedAt: new Date().toISOString()
-            })
+            const now = new Date().toISOString()
+            const { data: row, error } = await supabase
+                .from('channel_connections')
+                .insert({
+                    id: `chan_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+                    channel_id: data.channelId,
+                    name: data.name,
+                    is_active: data.isActive ?? false,
+                    created_at: now,
+                    updated_at: now,
+                })
+                .select()
+                .single()
+            if (error) throw error
+            return _ccConn(row)
         } catch (error) {
             console.error('Failed to create channel connection:', error)
             throw error
@@ -50,11 +84,17 @@ export class ChannelService {
 
     async updateConnection(id: string, updates: Partial<ChannelConnection>): Promise<ChannelConnection> {
         try {
-            const updated = {
-                ...updates,
-                updatedAt: new Date().toISOString()
-            }
-            return await this.db.channelConnections.update(id, updated)
+            const payload: Record<string, any> = { updated_at: new Date().toISOString() }
+            if (updates.isActive !== undefined) payload.is_active = updates.isActive
+            if (updates.name !== undefined) payload.name = updates.name
+            const { data: row, error } = await supabase
+                .from('channel_connections')
+                .update(payload)
+                .eq('id', id)
+                .select()
+                .single()
+            if (error) throw error
+            return _ccConn(row)
         } catch (error) {
             console.error(`Failed to update connection ${id}:`, error)
             throw error
@@ -67,8 +107,6 @@ export class ChannelService {
         if (connection) {
             return this.updateConnection(connection.id, { isActive })
         } else {
-            // Create if doesn't exist (e.g. first time enabling)
-            // Map channel ID to display name
             const channelNames: Record<string, string> = {
                 airbnb: 'Airbnb',
                 booking: 'Booking.com',
@@ -90,13 +128,10 @@ export class ChannelService {
 
     async getMappings(connectionId?: string): Promise<ChannelRoomMapping[]> {
         try {
-            const result = await this.db.channelRoomMappings?.list({ limit: 100 }) || []
-
-            if (connectionId) {
-                return result.filter((m: ChannelRoomMapping) => m.channelConnectionId === connectionId)
-            }
-
-            return result
+            let query = supabase.from('channel_room_mappings').select('*').limit(100)
+            if (connectionId) query = query.eq('channel_connection_id', connectionId)
+            const { data } = await query
+            return (data || []).map(_ccMap)
         } catch (error) {
             console.error('Failed to fetch room mappings:', error)
             return []
@@ -105,16 +140,24 @@ export class ChannelService {
 
     async createMapping(data: Partial<ChannelRoomMapping>): Promise<ChannelRoomMapping> {
         try {
-            // Ensure export token is generated if not provided
             const exportToken = data.exportToken || Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15)
-
-            return await this.db.channelRoomMappings.create({
-                ...data,
-                exportToken,
-                syncStatus: 'pending',
-                createdAt: new Date().toISOString(),
-                updatedAt: new Date().toISOString()
-            })
+            const now = new Date().toISOString()
+            const { data: row, error } = await supabase
+                .from('channel_room_mappings')
+                .insert({
+                    id: `map_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+                    channel_connection_id: data.channelConnectionId,
+                    local_room_type_id: data.localRoomTypeId,
+                    import_url: data.importUrl,
+                    export_token: exportToken,
+                    sync_status: 'pending',
+                    created_at: now,
+                    updated_at: now,
+                })
+                .select()
+                .single()
+            if (error) throw error
+            return _ccMap(row)
         } catch (error) {
             console.error('Failed to create room mapping:', error)
             throw error
@@ -123,11 +166,18 @@ export class ChannelService {
 
     async updateMapping(id: string, updates: Partial<ChannelRoomMapping>): Promise<ChannelRoomMapping> {
         try {
-            const updated = {
-                ...updates,
-                updatedAt: new Date().toISOString()
-            }
-            return await this.db.channelRoomMappings.update(id, updated)
+            const payload: Record<string, any> = { updated_at: new Date().toISOString() }
+            if (updates.syncStatus !== undefined) payload.sync_status = updates.syncStatus
+            if (updates.importUrl !== undefined) payload.import_url = updates.importUrl
+            if (updates.lastSyncedAt !== undefined) payload.last_synced_at = updates.lastSyncedAt
+            const { data: row, error } = await supabase
+                .from('channel_room_mappings')
+                .update(payload)
+                .eq('id', id)
+                .select()
+                .single()
+            if (error) throw error
+            return _ccMap(row)
         } catch (error) {
             console.error(`Failed to update mapping ${id}:`, error)
             throw error
@@ -136,7 +186,7 @@ export class ChannelService {
 
     async deleteMapping(id: string): Promise<void> {
         try {
-            await this.db.channelRoomMappings.delete(id)
+            await supabase.from('channel_room_mappings').delete().eq('id', id)
         } catch (error) {
             console.error(`Failed to delete mapping ${id}:`, error)
             throw error
@@ -147,8 +197,22 @@ export class ChannelService {
 
     async getExternalBookings(mappingId: string): Promise<ExternalBooking[]> {
         try {
-            const result = await this.db.externalBookings?.list({ limit: 500 }) || []
-            return result.filter((b: ExternalBooking) => b.mappingId === mappingId)
+            const { data } = await supabase
+                .from('external_bookings')
+                .select('*')
+                .eq('mapping_id', mappingId)
+                .limit(500)
+            return (data || []).map((r: any) => ({
+                id: r.id,
+                mappingId: r.mapping_id,
+                externalId: r.external_id,
+                startDate: r.start_date,
+                endDate: r.end_date,
+                summary: r.summary,
+                rawData: r.raw_data,
+                createdAt: r.created_at,
+                updatedAt: r.updated_at,
+            }))
         } catch (error) {
             console.error(`Failed to fetch external bookings for mapping ${mappingId}:`, error)
             return []

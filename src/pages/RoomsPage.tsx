@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { blink } from '@/blink/client'
+import { supabase } from '@/lib/supabase'
 import { RoomType, Room } from '@/types'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
@@ -10,7 +10,6 @@ import { useCurrency } from '@/hooks/use-currency'
 import { bookingEngine } from '@/services/booking-engine'
 
 export function RoomsPage() {
-  const db = (blink.db as any)
   const { currency } = useCurrency()
   const [roomTypes, setRoomTypes] = useState<RoomType[]>([])
   const [rooms, setRooms] = useState<Room[]>([])
@@ -42,12 +41,14 @@ export function RoomsPage() {
     setLoading(true)
     try {
       // Force fresh fetch - use bookingEngine.getAllBookings() for consistent data structure
-      const [typesData, roomsData, propertiesData, bookingsData] = await Promise.all([
-        db.roomTypes.list({ orderBy: { createdAt: 'asc' } }),
-        db.rooms.list({ orderBy: { createdAt: 'asc' } }),
-        db.properties.list({ orderBy: { createdAt: 'desc' } }),
+      const [rtRaw, roomsRaw, bookingsData] = await Promise.all([
+        supabase.from('room_types').select('*').order('created_at'),
+        supabase.from('rooms').select('*').order('created_at'),
         bookingEngine.getAllBookings()
       ])
+      const typesData = (rtRaw.data || []).map((r: any) => ({ ...r, basePrice: r.base_price, imageUrl: r.image_url }))
+      const roomsData = (roomsRaw.data || []).map((r: any) => ({ ...r, roomNumber: r.room_number, roomTypeId: r.room_type_id }))
+      const propertiesData = roomsData.map((r: any) => ({ ...r, propertyTypeId: r.roomTypeId, status: r.status === 'available' ? 'active' : r.status }))
 
       // Add fallback images to room types that don't have them
       const typesWithImages = (typesData as RoomType[]).map(rt => ({
