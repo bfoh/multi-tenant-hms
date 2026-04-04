@@ -53,6 +53,7 @@ const BookingPage = lazy(() => import('./pages/BookingPage').then(m => ({ defaul
 const VirtualTourPage = lazy(() => import('./pages/VirtualTourPage').then(m => ({ default: m.VirtualTourPage })))
 
 import { BookingCartProvider } from './context/BookingCartContext'
+import { AuthLogger } from './components/auth/AuthLogger'
 
 function App() {
   const [adminSeeded, setAdminSeeded] = useState(() => {
@@ -75,49 +76,12 @@ function App() {
         console.log('🔧 Initializing database schema...')
         await initializeDatabaseSchema()
         console.log('✅ Database schema initialized')
-
-        console.log('📝 Initializing activity log service...')
-        try {
-          const { data: { user: currentUser } } = await supabase.auth.getUser()
-          if (currentUser) {
-            activityLogService.setCurrentUser(currentUser.id)
-            console.log('✅ Activity log service initialized with user:', currentUser.email)
-          } else {
-            activityLogService.setCurrentUser('system')
-            console.log('✅ Activity log service initialized with system user')
-          }
-        } catch (error) {
-          console.warn('⚠️ Failed to initialize activity log service with user, using system:', error)
-          activityLogService.setCurrentUser('system')
-        }
       } catch (error) {
         console.error('❌ Failed to initialize app:', error)
       }
     }
     initializeApp()
   }, [adminSeeded])
-
-  useEffect(() => {
-    const checkAuthStatus = async () => {
-      try {
-        const { data: { user: currentUser } } = await supabase.auth.getUser()
-        if (currentUser) {
-          activityLogService.setCurrentUser(currentUser.id)
-          console.log('📝 [App] Activity log service updated with user:', currentUser.email)
-        } else {
-          activityLogService.setCurrentUser('system')
-          console.log('📝 [App] Activity log service updated with system user')
-        }
-      } catch (error) {
-        console.warn('⚠️ [App] Failed to check auth status for activity log service:', error)
-        activityLogService.setCurrentUser('system')
-      }
-    }
-
-    checkAuthStatus()
-    const interval = setInterval(checkAuthStatus, 30000)
-    return () => clearInterval(interval)
-  }, [])
 
   useEffect(() => {
     let isCreating = false
@@ -159,6 +123,7 @@ function App() {
     <ErrorBoundary>
       <BookingCartProvider>
         <BrowserRouter>
+          <AuthLogger />
           <Toaster position="top-right" />
           <VoiceWidget />
           <Suspense fallback={<div className="flex items-center justify-center py-12"><div className="w-12 h-12 border-4 border-primary border-t-transparent rounded-full animate-spin" /></div>}>

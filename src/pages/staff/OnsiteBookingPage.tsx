@@ -389,34 +389,7 @@ export function OnsiteBookingPage() {
           ...(discountValue > 0 ? { discount: { type: discountType, value: discountValue, amount: discountAmount } } : {})
         } as any)
 
-        // Booking engine sends its own confirmation email for single bookings
-
-        // Log single-room walk-in booking
-        try {
-          await activityLogService.log({
-            action: 'created',
-            entityType: 'booking',
-            entityId: 'walk-in-' + Date.now(),
-            details: {
-              guestName: guestInfo.name,
-              guestEmail: guestInfo.email,
-              roomNumber: cart[0].roomNumber,
-              roomType: cart[0].roomTypeName,
-              checkIn: format(cart[0].checkIn, 'yyyy-MM-dd'),
-              checkOut: format(cart[0].checkOut, 'yyyy-MM-dd'),
-              totalPrice: grandTotal,
-              source: 'onsite/walk-in',
-              paymentMethod: primaryPaymentMethod,
-              paymentSplits: paymentSplitsData,
-              paymentType,
-              createdAt: new Date().toISOString()
-            },
-            userId: user?.id || 'system'
-          })
-        } catch (logError) {
-          console.error('Activity logging failed:', logError)
-        }
-
+        // Booking engine sends its own confirmation email and log for single bookings
         toast.success('Booking completed successfully!')
       } else {
         // Multiple rooms: use createGroupBooking so all rooms share one group reference
@@ -436,7 +409,7 @@ export function OnsiteBookingPage() {
         })
 
         if (bookingEngine.getOnlineStatus()) {
-          // Build payment status section for the group summary email
+          // (email logic remains same...)
           const paymentStatusHtml = paymentType === 'full'
             ? `<p style="color: #16a34a; font-weight: bold;">✅ Full payment of ${formatCurrencySync(grandTotal, currency)} has been received. Thank you!</p>`
             : paymentType === 'part'
@@ -463,9 +436,9 @@ export function OnsiteBookingPage() {
                   <h3>Rooms Reserved:</h3>
                   <ul>
                     ${cart.map(c => {
-              const assigned = guestAssignments[c.id] || { name: guestInfo.name }
-              return `<li>Room ${c.roomNumber} (${c.roomTypeName}) - ${assigned.name}<br/>${format(c.checkIn, 'MMM dd')} to ${format(c.checkOut, 'MMM dd')}</li>`
-            }).join('')}
+                      const assigned = guestAssignments[c.id] || { name: guestInfo.name }
+                      return `<li>Room ${c.roomNumber} (${c.roomTypeName}) - ${assigned.name}<br/>${format(c.checkIn, 'MMM dd')} to ${format(c.checkOut, 'MMM dd')}</li>`
+                    }).join('')}
                   </ul>
                   <p style="color: #666; font-size: 12px; margin-top: 20px;">📎 Individual pre-invoices for each room have been sent separately.</p>
                   <p>We look forward to welcoming your group!</p>
@@ -478,32 +451,6 @@ export function OnsiteBookingPage() {
         }
 
         toast.success(`Group booking for ${cart.length} rooms completed successfully!`)
-
-        // Log group booking
-        try {
-          await activityLogService.log({
-            action: 'created',
-            entityType: 'booking',
-            entityId: 'group-' + Date.now(),
-            details: {
-              guestName: guestInfo.name,
-              guestEmail: guestInfo.email,
-              roomCount: cart.length,
-              rooms: cart.map(c => `Room ${c.roomNumber} (${c.roomTypeName})`).join(', '),
-              checkIn: checkIn ? format(checkIn, 'yyyy-MM-dd') : '',
-              checkOut: checkOut ? format(checkOut, 'yyyy-MM-dd') : '',
-              amount: grandTotal,
-              source: 'onsite/group',
-              paymentMethod: primaryPaymentMethod,
-              paymentSplits: paymentSplitsData,
-              paymentType,
-              createdAt: new Date().toISOString()
-            },
-            userId: user?.id || 'system'
-          })
-        } catch (logError) {
-          console.error('Activity logging failed:', logError)
-        }
       }
 
       navigate('/staff/dashboard')

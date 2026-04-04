@@ -175,19 +175,6 @@ export function StaffLoginPage() {
       const staffRole = staff.role as StaffRole
       const dashboardPath = getRoleDashboard(staffRole)
 
-      // Log the login activity
-      try {
-        await activityLogService.logUserLogin(currentUser.id, {
-          email: currentUser.email || '',
-          role: staffRole,
-          staffName: staff.name,
-          loginAt: new Date().toISOString()
-        })
-      } catch (logError) {
-        console.error('Failed to log login activity:', logError)
-        // Don't fail the login if logging fails
-      }
-
       console.log('🎉 [StaffLoginPage] Login successful, redirecting...')
       toast.success(`Welcome back, ${staff.name}!`)
 

@@ -126,18 +126,6 @@ export function AppLayout() {
   })
 
   const handleLogout = async () => {
-    try {
-      // Log the logout activity before signing out
-      const { data: { user } } = await supabase.auth.getUser()
-      if (user) {
-        await activityLogService.logUserLogout(user.id, { email: user.email }).catch(err =>
-          console.error('Failed to log logout activity:', err)
-        )
-      }
-    } catch (error) {
-      console.error('Failed to get current user for logout logging:', error)
-    }
-
     await supabase.auth.signOut()
   }
 
