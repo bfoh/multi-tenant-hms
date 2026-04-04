@@ -46,6 +46,25 @@ const DEFAULT_TEMPLATES: Template[] = [
         name: 'Seasonal Discount (SMS)',
         channel: 'sms',
         content: `Special Offer from AMP Lodge! Use code SEASON15 for 15% off your fall stay. See more: {{guest_link}}`
+    },
+    {
+        id: '5',
+        name: 'Weekend Getaway (SMS)',
+        channel: 'sms',
+        content: `Need a break this weekend? Escaping to AMP Lodge is easier than ever with our last-minute weekend rates. Book your restful stay here: {{guest_link}}`
+    },
+    {
+        id: '6',
+        name: 'Welcome Back (Email)',
+        channel: 'email',
+        subject: 'We miss you at AMP Lodge!',
+        content: `<div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: 0 auto; line-height: 1.6;">\n  <h1 style="color: #8B5E3C;">Welcome Back to Serenity</h1>\n  <p>Hi {{name}},</p>\n  <p>Long time no see! We miss having you at AMP Lodge. We noticed it's been a while since your last visit, and we'd love to welcome you back.</p>\n  <div style="background-color: #FDFDFD; padding: 20px; border-radius: 10px; border: 1px solid #E5E5E5; margin: 20px 0;">\n    <p style="margin: 0;">Special loyalty discount: <strong>10% OFF</strong> your next stay when you book through this link.</p>\n  </div>\n  <p><a href="{{guest_link}}" style="background-color: #8B5E3C; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block;">Book Your Return Stay</a></p>\n  <p>Warm regards,<br>The AMP Lodge Team</p>\n</div>`
+    },
+    {
+        id: '7',
+        name: 'Welcome Back (SMS)',
+        channel: 'sms',
+        content: `Long time no see! We miss having you at AMP Lodge. Treat yourself to a well-deserved break in our serene environment. Welcome back with 10% off: {{guest_link}}`
     }
 ]
 
