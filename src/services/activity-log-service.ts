@@ -189,12 +189,13 @@ class ActivityLogService {
    * to the caller so that main operations (like booking deletion) are not affected
    */
   public async log(data: ActivityLogData): Promise<void> {
-    // Wrap entire function in try-catch to ensure logging never blocks operations
-    try {
-      // Use provided userId or fall back to current user
-      const userId = data.userId || this.currentUserId || 'system'
+    // 5-second timeout promise
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('Activity log timeout after 5s')), 5000)
+    )
 
-      // Prepare the payload mapping clearly to database column names (snake_case)
+    try {
+      const userId = data.userId || this.currentUserId || 'system'
       const logEntry: any = {
         id: crypto.randomUUID(),
         action: data.action,
@@ -202,47 +203,34 @@ class ActivityLogService {
         entity_id: data.entityId,
         details: JSON.stringify(data.details || {}),
         user_id: userId,
-        // tenant_id will be automatically set by the DB trigger
         created_at: new Date().toISOString(),
       }
 
-      // Only include metadata if it's provided (handles cases where column might not exist yet)
       if (data.metadata) {
         logEntry.metadata = JSON.stringify(data.metadata)
       }
 
-      console.log(`[ActivityLog] Attempting to log: ${data.action} on ${data.entityType}...`)
-
       // If offline, queue the log
       if (!this.isOnline) {
         this.pendingLogs.push(data)
-        console.log('[ActivityLog] Offline - queued for later sync')
         return
       }
 
-      // Insert directly into activity_logs via Supabase
-      const { error: logError } = await supabase.from('activity_logs').insert(logEntry)
+      // Race the insertion against a 5s timeout
+      const { error: logError } = await Promise.race([
+        supabase.from('activity_logs').insert(logEntry),
+        timeoutPromise as any
+      ])
 
       if (logError) {
-        // Log the exact error to help debugging (especially if columns are missing)
-        console.error('[ActivityLog] Database insertion failed:', {
-          message: logError.message,
-          code: logError.code,
-          hint: logError.hint,
-          details: logError.details
-        })
+        console.error('[ActivityLog] Database insertion failed:', logError.message)
         this.pendingLogs.push(data)
-      } else {
-        console.log('[ActivityLog] Activity logged successfully')
       }
-    } catch (error) {
-      // Catch-all to ensure we never throw from this method
-      console.error('[ActivityLog] Critical error in logging logic (non-blocking):', error)
+    } catch (error: any) {
+      console.error('[ActivityLog] Non-blocking logging error:', error.message || error)
       try {
         this.pendingLogs.push(data)
-      } catch (queueError) {
-        console.error('[ActivityLog] Failed to queue activity log:', queueError)
-      }
+      } catch (e) {}
     }
   }
 

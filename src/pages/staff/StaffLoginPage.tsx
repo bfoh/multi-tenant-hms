@@ -69,17 +69,30 @@ export function StaffLoginPage() {
     e.preventDefault()
     setLoading(true)
 
-    try {
-      console.log('🚀 [StaffLoginPage] Starting login process...')
+    // Safety timeout: force release the "Signing in..." state after 15s to prevent infinite hang
+    const loginTimeout = setTimeout(() => {
+      setLoading(current => {
+        if (current) {
+          console.warn('🔐 [StaffLoginPage] Login process timeout after 15s. Releasing UI.')
+          toast.error('Login process is taking longer than expected. Please try again.')
+          return false
+        }
+        return current
+      })
+    }, 15000)
 
-      // Perform login with Supabase
-      const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+    try {
+      console.log('🔐 [StaffLoginPage] Starting login process for:', email)
+      
+      // 1. Authenticate with Supabase
+      console.log('🔐 [StaffLoginPage] Calling signInWithPassword...')
+      const { error: authError, data: authData } = await supabase.auth.signInWithPassword({
         email,
-        password
+        password,
       })
 
       if (authError) {
-        console.error('❌ [StaffLoginPage] Auth error:', authError)
+        console.error('🔐 [StaffLoginPage] Auth error:', authError)
         const isNetworkError = authError.message?.toLowerCase().includes('fetch') ||
           authError.message?.toLowerCase().includes('network') ||
           authError.message?.toLowerCase().includes('abort') ||
@@ -87,25 +100,30 @@ export function StaffLoginPage() {
           authError.message?.toLowerCase().includes('signal') ||
           authError.name === 'AuthRetryableFetchError' ||
           authError.name === 'AbortError'
+        
         toast.error(
           isNetworkError
             ? 'Cannot reach the server. The service may be temporarily unavailable — please try again in a moment.'
             : authError.message || 'Login failed'
         )
+        clearTimeout(loginTimeout)
         setLoading(false)
         return
       }
-
+      
       const currentUser = authData.user
       if (!currentUser) {
+        console.error('🔐 [StaffLoginPage] No user returned from authData')
         toast.error('Login failed - no user returned')
+        clearTimeout(loginTimeout)
         setLoading(false)
         return
       }
 
       console.log('✅ [StaffLoginPage] User authenticated, checking staff access...')
 
-      // Get staff record from Supabase
+      // 2. Get staff record from Supabase
+      console.log('🔐 [StaffLoginPage] Fetching staff record...')
       const { data: staffResults, error: staffError } = await supabase
         .from('staff')
         .select('*')
@@ -113,17 +131,19 @@ export function StaffLoginPage() {
         .limit(1)
 
       if (staffError || !staffResults || staffResults.length === 0) {
+        console.error('🔐 [StaffLoginPage] Staff record check failed:', staffError || 'Not found')
         await supabase.auth.signOut()
         toast.error('You do not have staff access')
+        clearTimeout(loginTimeout)
         setLoading(false)
         return
       }
 
       const staff = staffResults[0]
+      console.log('🔐 [StaffLoginPage] Staff record found for:', staff.name)
 
-      // Check first_login flag - try multiple sources
+      // 3. Check first_login flag - try multiple sources
       console.log('🔍 [StaffLoginPage] Checking first_login flag...')
-
       let isFirstLogin = false
 
       // First, try the users table
@@ -133,15 +153,11 @@ export function StaffLoginPage() {
         .eq('id', currentUser.id)
         .single()
 
-      console.log('🔍 [StaffLoginPage] User data:', userData, 'error:', userError)
-
       if (userData && !userError) {
         isFirstLogin = userData.first_login === 1 || String(userData.first_login) === '1' || userData.first_login === true
-        console.log('🔍 [StaffLoginPage] first_login from users table:', userData.first_login, '-> isFirstLogin:', isFirstLogin)
       } else if (userError) {
         // If no users record exists, this is likely a first login - create the record
-        console.log('🔍 [StaffLoginPage] No users record found, creating one with first_login=1...')
-
+        console.log('🔍 [StaffLoginPage] No users record found, creating one...')
         const { error: insertError } = await supabase
           .from('users')
           .insert({
@@ -152,40 +168,34 @@ export function StaffLoginPage() {
             updated_at: new Date().toISOString()
           })
 
-        if (!insertError) {
-          console.log('🔍 [StaffLoginPage] Created users record with first_login=1')
-          isFirstLogin = true
-        } else {
-          console.warn('🔍 [StaffLoginPage] Failed to create users record:', insertError)
-          // Still treat as first login for safety
-          isFirstLogin = true
-        }
+        if (!insertError) isFirstLogin = true
       }
 
-      console.log('🔐 [StaffLoginPage] isFirstLogin final value:', isFirstLogin)
-
       if (isFirstLogin) {
-        console.log('🔐 [StaffLoginPage] First login detected, showing password change dialog')
+        console.log('🔐 [StaffLoginPage] First login detected, showing password change...')
         setShowPasswordChange(true)
+        clearTimeout(loginTimeout)
         setLoading(false)
         return
       }
 
-      // Role-based redirect
+      // 4. Role-based redirect
       const staffRole = staff.role as StaffRole
       const dashboardPath = getRoleDashboard(staffRole)
 
-      console.log('🎉 [StaffLoginPage] Login successful, redirecting...')
+      console.log('🎉 [StaffLoginPage] Login successful, redirecting to:', dashboardPath)
       toast.success(`Welcome back, ${staff.name}!`)
 
       // Initialize activity logging with current user
       activityLogService.setCurrentUser(currentUser.id)
 
+      clearTimeout(loginTimeout)
       navigate(returnTo ? decodeURIComponent(returnTo) : dashboardPath)
     } catch (error: any) {
       console.error('❌ [StaffLoginPage] Login failed:', error)
-      toast.error(error.message || 'Invalid credentials')
+      toast.error(error.message || 'An unexpected error occurred during login.')
     } finally {
+      clearTimeout(loginTimeout)
       setLoading(false)
     }
   }

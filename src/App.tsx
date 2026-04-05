@@ -73,51 +73,20 @@ function App() {
     const initializeApp = async () => {
       try {
         console.log('🚀 App running with Supabase backend')
-        console.log('🔧 Initializing database schema...')
-        await initializeDatabaseSchema()
-        console.log('✅ Database schema initialized')
+        console.log('🔧 Initializing database schema (background)...')
+        // Don't await here to prevent blocking the initial render
+        initializeDatabaseSchema().then(() => {
+          console.log('✅ Database schema initialized')
+        }).catch(err => {
+          console.error('❌ Database schema initialization error:', err)
+        })
       } catch (error) {
-        console.error('❌ Failed to initialize app:', error)
+        console.error('❌ Failed to start app:', error)
       }
     }
     initializeApp()
-  }, [adminSeeded])
-
-  useEffect(() => {
-    let isCreating = false
-
-    const ensureAdminStaffRecord = async (userId: string, email: string) => {
-      if (isCreating) return
-      try {
-        isCreating = true
-        const { data: existingStaff } = await supabase.from('staff').select('id').eq('user_id', userId).limit(1)
-
-        if (!existingStaff || existingStaff.length === 0) {
-          await supabase.from('staff').insert({
-            id: `staff_admin_${Date.now()}`,
-            user_id: userId,
-            name: 'Admin User',
-            email,
-            role: 'admin',
-            created_at: new Date().toISOString()
-          })
-        }
-      } catch (error) {
-        console.log('ℹ️ [App] Admin staff record error:', error)
-      } finally {
-        isCreating = false
-      }
-    }
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      const user = session?.user
-      if (user?.email === import.meta.env.VITE_ADMIN_EMAIL && user?.id) {
-        await ensureAdminStaffRecord(user.id, user.email)
-      }
-    })
-
-    return () => subscription.unsubscribe()
   }, [])
+
 
   return (
     <ErrorBoundary>

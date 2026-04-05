@@ -51,12 +51,20 @@ export async function initializeDatabaseSchema(): Promise<void> {
 
     // Test each table and create if necessary
     for (const tableName of requiredTables) {
+      const checkTimeout = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Table check timeout')), 2000)
+      )
+
       try {
-        // Try to access the table
-        await db[tableName].list({ limit: 1 })
+        console.log(`[DatabaseSchema] Checking table '${tableName}'...`)
+        // Try to access the table with a timeout
+        await Promise.race([
+          db[tableName].list({ limit: 1 }),
+          checkTimeout
+        ])
         console.log(`[DatabaseSchema] ✅ Table '${tableName}' exists`)
       } catch (error: any) {
-        console.log(`[DatabaseSchema] ⚠️ Table '${tableName}' does not exist, creating...`)
+        console.log(`[DatabaseSchema] ⚠️ Table '${tableName}' error: ${error.message || 'not found'}`)
 
         // For activityLogs, create it by inserting a record
         if (tableName === 'activityLogs') {

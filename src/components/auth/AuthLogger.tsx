@@ -41,23 +41,43 @@ export function AuthLogger() {
       // Handle Login/Logout Auditing
       if (event === 'SIGNED_IN' && currentUserId && lastUserId.current !== currentUserId) {
         // User logged in (or session restored)
-        console.log('🛡️ [AuthLogger] Auditing SIGNED_IN...')
-        await activityLogService.logUserLogin(currentUserId, {
-          email: user?.email || '',
-          source: 'authenticated_session'
-        }).catch(err => console.error('[AuthLogger] Login log failed:', err))
+        console.log('🛡️ [AuthLogger] Handling SIGNED_IN tasks...')
+        
+        // Execute post-login tasks in parallel, ensuring they don't block each other
+        const tasks = [
+          activityLogService.logUserLogin(currentUserId, {
+            email: user?.email || '',
+            source: 'authenticated_session'
+          })
+        ]
+
+        // Check if this is the admin user that needs a staff record
+        const adminEmail = import.meta.env.VITE_ADMIN_EMAIL
+        if (user?.email && adminEmail && user.email === adminEmail) {
+          console.log('🛡️ [AuthLogger] Admin user detected, ensuring staff record...')
+          tasks.push(ensureAdminStaffRecord(currentUserId, user.email))
+        }
+
+        Promise.allSettled(tasks).then(results => {
+          const failed = results.filter(r => r.status === 'rejected')
+          if (failed.length > 0) {
+            console.warn('🛡️ [AuthLogger] Some post-login tasks failed:', failed)
+          }
+        })
+
         lastUserId.current = currentUserId
       } 
       
       else if (event === 'SIGNED_OUT') {
-        // User logged out
-        if (lastUserId.current) {
-          console.log('🛡️ [AuthLogger] Auditing SIGNED_OUT for:', lastUserId.current)
-          await activityLogService.logUserLogout(lastUserId.current).catch(err => 
+        const userIdToLog = lastUserId.current
+        lastUserId.current = null // Clear immediately to prevent double-logs
+        
+        if (userIdToLog) {
+          console.log('🛡️ [AuthLogger] Auditing SIGNED_OUT for:', userIdToLog)
+          activityLogService.logUserLogout(userIdToLog).catch(err => 
             console.error('[AuthLogger] Logout log failed:', err)
           )
         }
-        lastUserId.current = null
       }
 
       // If ID changed without an event (rare but possible), update ref
@@ -65,6 +85,31 @@ export function AuthLogger() {
          lastUserId.current = currentUserId
       }
     })
+
+    const ensureAdminStaffRecord = async (userId: string, email: string) => {
+      try {
+        const { data: existingStaff } = await supabase
+          .from('staff')
+          .select('id')
+          .eq('user_id', userId)
+          .limit(1)
+
+        if (!existingStaff || existingStaff.length === 0) {
+          const { error } = await supabase.from('staff').insert({
+            id: `staff_admin_${Date.now()}`,
+            user_id: userId,
+            name: 'Admin User',
+            email,
+            role: 'admin',
+            created_at: new Date().toISOString()
+          })
+          if (error) throw error
+          console.log('🛡️ [AuthLogger] Successfully created admin staff record')
+        }
+      } catch (error) {
+        console.warn('🛡️ [AuthLogger] ensureAdminStaffRecord error:', error)
+      }
+    }
 
     return () => {
       subscription.unsubscribe()
