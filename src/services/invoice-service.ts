@@ -85,7 +85,10 @@ export async function createInvoiceData(booking: BookingWithDetails, roomDetails
     const hotelSettings = await hotelSettingsService.getHotelSettings()
 
     // Fetch additional charges for this booking
-    const additionalCharges = await bookingChargesService.getChargesForBooking(booking.id)
+    // Filter out negative records — these are internal payment-offset entries (e.g. "Payment - Stay Extension")
+    // that should never appear on a guest-facing invoice
+    const allCharges = await bookingChargesService.getChargesForBooking(booking.id)
+    const additionalCharges = allCharges.filter(c => (c.amount || 0) > 0)
     const additionalChargesTotal = additionalCharges.reduce((sum, c) => sum + (c.amount || 0), 0)
 
     const invoiceNumber = `INV-${Date.now()}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`
@@ -231,9 +234,11 @@ export async function generateInvoiceHTML(invoiceData: InvoiceData): Promise<str
     const _discRow = invoiceData.charges.discountTotal > 0
       ? `<tr class="disc"><td>Discount${invoiceData.charges.discount?.type === 'percentage' ? ` (${invoiceData.charges.discount.value}%)` : ''}</td><td class="r">&#x2212;&nbsp;${formatCurrencySync(invoiceData.charges.discountTotal, currency)}</td></tr>`
       : ''
-    const _addRows = invoiceData.charges.additionalCharges.map(ch =>
-      `<tr><td>${ch.description}</td><td class="c">${ch.quantity}</td><td class="r">${formatCurrencySync(ch.unitPrice, currency)}</td><td class="r"><strong>${formatCurrencySync(ch.amount, currency)}</strong></td></tr>`
-    ).join('')
+    const _addRows = invoiceData.charges.additionalCharges
+      .filter((ch: any) => (ch.amount || 0) > 0) // exclude payment-offset records
+      .map((ch: any) =>
+        `<tr><td>${ch.description}</td><td class="c">${ch.quantity}</td><td class="r">${formatCurrencySync(ch.unitPrice, currency)}</td><td class="r"><strong>${formatCurrencySync(ch.amount, currency)}</strong></td></tr>`
+      ).join('')
 
     const htmlContent = `<!DOCTYPE html>
 <html>
@@ -786,9 +791,11 @@ export async function generatePreInvoiceHTML(preInvoiceData: PreInvoiceData): Pr
       ? `<tr class="disc"><td>Discount${preInvoiceData.charges.discount?.type === 'percentage' ? ` (${preInvoiceData.charges.discount.value}%)` : ''}</td><td class="r">&#x2212;&nbsp;${formatCurrencySync(preInvoiceData.charges.discountTotal, currency)}</td></tr>`
       : ''
 
-    const additionalRows = preInvoiceData.charges.additionalCharges.map(ch =>
-      `<tr><td>${ch.description}</td><td class="c">${ch.quantity}</td><td class="r">${formatCurrencySync(ch.unitPrice, currency)}</td><td class="r"><strong>${formatCurrencySync(ch.amount, currency)}</strong></td></tr>`
-    ).join('')
+    const additionalRows = preInvoiceData.charges.additionalCharges
+      .filter((ch: any) => (ch.amount || 0) > 0) // exclude payment-offset records
+      .map((ch: any) =>
+        `<tr><td>${ch.description}</td><td class="c">${ch.quantity}</td><td class="r">${formatCurrencySync(ch.unitPrice, currency)}</td><td class="r"><strong>${formatCurrencySync(ch.amount, currency)}</strong></td></tr>`
+      ).join('')
 
     const htmlContent = `<!DOCTYPE html>
 <html>
@@ -1219,7 +1226,9 @@ export async function createGroupInvoiceData(bookings: BookingWithDetails[], bil
       // Current implementation saves them ONLY in metadata (specialRequests).
       // So `bookingChargesService.getChargesForBooking` might return 0 if they weren't saved to `charges` table.
 
-      const dbCharges = await bookingChargesService.getChargesForBooking(booking.id)
+      const allDbCharges = await bookingChargesService.getChargesForBooking(booking.id)
+      // Exclude negative payment-offset records (e.g. "Payment - Stay Extension")
+      const dbCharges = allDbCharges.filter(c => (c.amount || 0) > 0)
       const dbChargesTotal = dbCharges.reduce((sum, c) => sum + (c.amount || 0), 0)
 
       const checkIn = new Date(booking.checkIn)
