@@ -531,7 +531,9 @@ class BookingEngine {
       total_price: finalTotalPrice,
       numGuests: bookingData.numGuests ?? 1,
       paymentMethod: bookingData.paymentMethod || bookingData.payment_method,
-      specialRequests
+      specialRequests,
+      createdBy: bookingData.createdBy || currentUser?.id || null,
+      createdByName: resolvedStaffName || null,
     }
 
     console.log('[BookingEngine] Creating booking with AGGRESSIVE payload:', JSON.stringify(bookingPayload, null, 2))

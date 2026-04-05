@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS hr_weekly_revenue (
 -- 4. Update bookings table for revenue attribution
 ALTER TABLE IF EXISTS bookings ADD COLUMN IF NOT EXISTS created_by text;
 ALTER TABLE IF EXISTS bookings ADD COLUMN IF NOT EXISTS created_by_name text;
+ALTER TABLE IF EXISTS bookings ADD COLUMN IF NOT EXISTS total_price decimal(12,2) DEFAULT 0;
 
 -- 5. Disable RLS on these tables so staff can read/write freely
 --    (the app uses Supabase service-role-equivalent anon key with these tables)

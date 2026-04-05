@@ -41,7 +41,8 @@ const _revenueDb = {
         checkOut: b.check_out,
         roomId: b.room_id,
         guestId: b.guest_id,
-        totalPrice: b.total_price,
+        // total_price is the canonical column; fall back to amount (legacy col name)
+        totalPrice: b.total_price || b.amount || 0,
         finalAmount: b.final_amount,
         discountAmount: b.discount_amount,
         paymentMethod: b.payment_method,
@@ -49,6 +50,7 @@ const _revenueDb = {
         createdBy: b.created_by,
         createdAt: b.created_at,
         userId: b.user_id,
+        roomTypeId: b.room_type_id,
       }))
     },
   },
@@ -74,6 +76,12 @@ const _revenueDb = {
         paymentMethod: c.payment_method,
         createdAt: c.created_at,
       }))
+    },
+  },
+  roomTypes: {
+    list: async (opts?: { limit?: number }) => {
+      const { data } = await supabase.from('room_types').select('id, base_price').limit(opts?.limit || 100)
+      return (data || []).map((rt: any) => ({ id: rt.id, basePrice: rt.base_price || 0 }))
     },
   },
   hr_weekly_revenue: {
@@ -273,13 +281,14 @@ export async function fetchBookingsForStaffWeek(
 ): Promise<StaffWeekResult> {
   const db = _revenueDb
 
-  let allBookings: any = null, allRooms: any = null, allGuests: any = null, allChargesRaw: any = null
+  let allBookings: any = null, allRooms: any = null, allGuests: any = null, allChargesRaw: any = null, allRoomTypes: any = null
   try {
-    ;[allBookings, allRooms, allGuests, allChargesRaw] = await Promise.all([
+    ;[allBookings, allRooms, allGuests, allChargesRaw, allRoomTypes] = await Promise.all([
       db.bookings.list({ limit: 2000 }),
       db.rooms.list({ limit: 500 }),
       db.guests.list({ limit: 1000 }),
       db.bookingCharges.list({ limit: 5000 }).catch(() => []),
+      db.roomTypes.list({ limit: 100 }).catch(() => []),
     ])
   } catch (e) {
     console.warn('[fetchBookingsForStaffWeek] DB error:', e)
@@ -294,6 +303,7 @@ export async function fetchBookingsForStaffWeek(
   // Build lookup maps
   const roomMap = new Map(((allRooms || []) as any[]).map((r: any) => [r.id, r]))
   const guestMap = new Map(((allGuests || []) as any[]).map((g: any) => [g.id, g]))
+  const roomTypeMap = new Map(((allRoomTypes || []) as any[]).map((rt: any) => [rt.id, rt]))
 
   // Group booking charges by booking ID
   const chargesByBookingId = new Map<string, any[]>()
@@ -349,7 +359,19 @@ export async function fetchBookingsForStaffWeek(
       }))
       const additionalChargesTotal = additionalCharges.reduce((s, c) => s + c.amount, 0)
 
-      const rawPrice = Number(b.totalPrice || 0)
+      // rawPrice: stored total_price/amount → fallback to roomType.basePrice × nights
+      let rawPrice = Number(b.totalPrice || 0)
+      if (rawPrice === 0) {
+        const room = roomMap.get(b.roomId) as any
+        const rtId = room?.roomTypeId || room?.room_type_id
+        const rtPrice = Number(roomTypeMap.get(rtId)?.basePrice || 0)
+        if (rtPrice > 0) {
+          const nights = Math.max(1, Math.round(
+            (new Date(b.checkOut).getTime() - new Date(b.checkIn).getTime()) / 86400000
+          ))
+          rawPrice = rtPrice * nights
+        }
+      }
       const discountAmt = Number(b.discountAmount || b.discount_amount || 0)
       // Use finalAmount (post-discount amount stored at check-in) when available,
       // otherwise derive from rawPrice - discountAmt.
