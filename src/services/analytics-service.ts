@@ -1,5 +1,4 @@
 import { supabase } from '@/lib/supabase'
-import { bookingEngine } from './booking-engine'
 
 const _analyticsDb = {
   roomTypes: {
@@ -50,6 +49,56 @@ const _analyticsDb = {
       return []
     },
   },
+  bookings: {
+    /** Fetch bookings directly from Supabase and normalize to a unified shape.
+     *  Provides both new-style fields (checkIn, totalPrice) AND legacy aliases
+     *  (dates.checkIn, amount, guest.email) so all analytics code works correctly. */
+    list: async () => {
+      const { data } = await supabase
+        .from('bookings')
+        .select('*, rooms(id, room_number, room_type_id, room_types(id, name, base_price)), guests(id, name, email, phone)')
+        .limit(5000)
+      return (data || []).map((b: any) => {
+        const totalPrice = Number(b.total_price || 0)
+        const checkIn  = b.check_in  || b.created_at?.split('T')[0] || ''
+        const checkOut = b.check_out || checkIn
+        const guestName  = b.guests?.name  || ''
+        const guestEmail = b.guests?.email || ''
+        const roomNumber = b.rooms?.room_number || ''
+        const roomTypeId = b.rooms?.room_type_id || b.room_type_id || ''
+
+        // Parse payment splits from special_requests
+        let paymentSplits: any[] | null = null
+        const sr = b.special_requests || ''
+        const splitsMatch = (sr as string).match(/<!-- PAYMENT_SPLITS:(.*?) -->/)
+        if (splitsMatch?.[1]) { try { paymentSplits = JSON.parse(splitsMatch[1]) } catch { } }
+
+        return {
+          // New canonical fields
+          id: b.id,
+          status: b.status,
+          checkIn,
+          checkOut,
+          totalPrice,
+          createdAt: b.created_at || '',
+          roomNumber,
+          roomTypeId,
+          paymentMethod: b.payment_method || '',
+          paymentSplits,
+          specialRequests: sr,
+          source: b.source || 'reception',
+          numGuests: b.num_guests || 1,
+          guestId: b.guest_id || '',
+          // Legacy aliases so existing analytics code works without changes
+          amount: totalPrice,
+          roomType: roomTypeId,
+          dates: { checkIn, checkOut },
+          guest: { email: guestEmail, fullName: guestName, name: guestName },
+          payment: { method: b.payment_method || '' },
+        }
+      })
+    },
+  },
 }
 import { startOfWeek, endOfWeek, endOfMonth, endOfYear } from 'date-fns'
 import { standaloneSalesService } from './standalone-sales-service'
@@ -77,7 +126,7 @@ class AnalyticsService {
     endDate?: Date
   ): Promise<RevenueAnalytics> {
     try {
-      const bookings = await bookingEngine.getAllBookings()
+      const bookings = await _analyticsDb.bookings.list()
       const db = _analyticsDb
       const [roomTypes, properties, allChargesRaw, allStandaloneSales] = await Promise.all([
         db.roomTypes.list(),
@@ -131,6 +180,7 @@ class AnalyticsService {
       let additionalChargesTotal = 0
       for (const c of (allChargesRaw || [])) {
         const amt = Number(c.amount || 0)
+        if (amt <= 0) continue // skip payment-offset records (negative charges)
         additionalChargesTotal += amt
         const cat = c.category || 'other'
         additionalRevenueByCategory[cat] = (additionalRevenueByCategory[cat] || 0) + amt
@@ -181,12 +231,14 @@ class AnalyticsService {
       // matching the same logic as the "Additional Revenue Sources" card.
       const chargesInRange = (from: string, to?: string) =>
         (allChargesRaw || []).reduce((sum: number, c: any) => {
+          const amt = Number(c.amount || 0)
+          if (amt <= 0) return sum // skip payment-offset records
           const cd = c.createdAt || c.created_at || ''
           if (!cd) return sum
           const cdDate = cd.slice(0, 10) // YYYY-MM-DD only
           if (cdDate < from) return sum
           if (to && cdDate > to) return sum
-          return sum + Number(c.amount || 0)
+          return sum + amt
         }, 0)
 
       const thisWeekEnd  = endOfWeek(new Date(), { weekStartsOn: 1 })
@@ -488,7 +540,7 @@ class AnalyticsService {
    */
   async getOccupancyAnalytics(): Promise<OccupancyAnalytics> {
     try {
-      const bookings = await bookingEngine.getAllBookings()
+      const bookings = await _analyticsDb.bookings.list()
       const db = _analyticsDb
       const [properties, roomTypes] = await Promise.all([
         db.properties.list(),
@@ -673,7 +725,7 @@ class AnalyticsService {
     try {
       const db = _analyticsDb
       const guests = await db.guests.list()
-      const bookings = await bookingEngine.getAllBookings()
+      const bookings = await _analyticsDb.bookings.list()
 
       const totalGuests = guests.length
 
@@ -860,7 +912,7 @@ class AnalyticsService {
         this.getOccupancyAnalytics()
       ])
 
-      const bookings = await bookingEngine.getAllBookings()
+      const bookings = await _analyticsDb.bookings.list()
 
       const totalBookings = bookings.filter(
         b => ['checked-in', 'checked-out'].includes(b.status)

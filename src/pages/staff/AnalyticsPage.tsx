@@ -27,7 +27,6 @@ import {
 import { usePermissions } from '@/hooks/use-permissions'
 import { analyticsService } from '@/services/analytics-service'
 import { AnalyticsExportService } from '@/services/analytics-export-service'
-import { bookingEngine } from '@/services/booking-engine'
 import { supabase } from '@/lib/supabase'
 import { standaloneSalesService } from '@/services/standalone-sales-service'
 import {
@@ -113,14 +112,48 @@ export function AnalyticsPage() {
   const loadAnalytics = async () => {
     setLoading(true)
     try {
-      const [revenueData, occupancyData, guestData, performanceData, allBookings, chargesRaw, salesRaw] =
+      const [revenueData, occupancyData, guestData, performanceData, allBookingsRaw, chargesRaw, salesRaw] =
         await Promise.all([
           analyticsService.getRevenueAnalytics(),
           analyticsService.getOccupancyAnalytics(),
           analyticsService.getGuestAnalytics(),
           analyticsService.getPerformanceMetrics(),
-          bookingEngine.getAllBookings(),
-          supabase.from('booking_charges').select('*').limit(5000).then(r => (r.data || []).map((c: any) => ({ ...c, bookingId: c.booking_id, unitPrice: c.unit_price, paymentMethod: c.payment_method }))).catch(() => []),
+          (async () => {
+            try {
+              const { data } = await supabase.from('bookings')
+                .select('*, rooms(id, room_number, room_type_id), guests(id, name, email)')
+                .limit(5000)
+              return (data || []).map((b: any) => {
+                const totalPrice = Number(b.total_price || 0)
+                const checkIn  = b.check_in  || ''
+                const checkOut = b.check_out || checkIn
+                let paymentSplits: any[] | null = null
+                const sr = b.special_requests || ''
+                const splitsMatch = (sr as string).match(/<!-- PAYMENT_SPLITS:(.*?) -->/)
+                if (splitsMatch?.[1]) { try { paymentSplits = JSON.parse(splitsMatch[1]) } catch { } }
+                return {
+                  id: b.id,
+                  status: b.status,
+                  checkIn,
+                  checkOut,
+                  totalPrice,
+                  amount: totalPrice,
+                  createdAt: b.created_at || '',
+                  roomNumber: b.rooms?.room_number || '',
+                  paymentMethod: b.payment_method || '',
+                  paymentSplits,
+                  dates: { checkIn, checkOut },
+                  payment: { method: b.payment_method || '' },
+                }
+              })
+            } catch { return [] as any[] }
+          })(),
+          (async () => {
+            try {
+              const { data } = await supabase.from('booking_charges').select('*').limit(5000)
+              return (data || []).map((c: any) => ({ ...c, bookingId: c.booking_id, unitPrice: c.unit_price, paymentMethod: c.payment_method, createdAt: c.created_at }))
+            } catch { return [] as any[] }
+          })(),
           standaloneSalesService.getAllSales().catch(() => []),
         ])
       setRevenue(revenueData)
@@ -128,7 +161,7 @@ export function AnalyticsPage() {
       setGuests(guestData)
       setPerformance(performanceData)
       setAllRevenueBookings(
-        allBookings.filter(b => ['checked-in', 'checked-out'].includes(b.status))
+        allBookingsRaw.filter((b: any) => ['checked-in', 'checked-out'].includes(b.status))
       )
       setAllChargesRaw(chargesRaw || [])
       setAllSalesRaw(salesRaw || [])
@@ -192,10 +225,10 @@ export function AnalyticsPage() {
     : breakdownMode === 'month' ? monthOptions[selectedMonthIdx] : yearOptions[selectedYearIdx]
 
   const breakdownBookings = allRevenueBookings.filter(b => {
-    const d = new Date(b.dates.checkIn)
-    return d >= activePeriod.start && d <= activePeriod.end
+    const d = new Date(b.checkIn || b.dates?.checkIn || '')
+    return !isNaN(d.getTime()) && d >= activePeriod.start && d <= activePeriod.end
   })
-  const breakdownTotal = breakdownBookings.reduce((s, b) => s + Number(b.amount || 0), 0)
+  const breakdownTotal = breakdownBookings.reduce((s, b) => s + Number(b.totalPrice || b.amount || 0), 0)
 
   const normPay = (raw: string) => {
     const s = (raw || '').trim().toLowerCase()
@@ -218,7 +251,7 @@ export function AnalyticsPage() {
     } else {
       const m = normPay(b.paymentMethod || b.payment?.method || '')
       if (m in bdAmounts) {
-        bdAmounts[m as keyof typeof bdAmounts] += Number(b.amount) || 0
+        bdAmounts[m as keyof typeof bdAmounts] += Number(b.totalPrice || b.amount) || 0
         bdCounts[m as keyof typeof bdCounts]++
       }
     }
@@ -248,8 +281,10 @@ export function AnalyticsPage() {
   })
   const chargeCatMap: Record<string, number> = {}
   for (const c of filteredCharges) {
+    const amt = Number(c.amount || 0)
+    if (amt <= 0) continue // skip payment-offset records
     const cat = c.category || 'other'
-    chargeCatMap[cat] = (chargeCatMap[cat] || 0) + Number(c.amount || 0)
+    chargeCatMap[cat] = (chargeCatMap[cat] || 0) + amt
   }
   for (const s of filteredSales) {
     const cat = (s as any).category || 'other'
@@ -260,10 +295,11 @@ export function AnalyticsPage() {
   // This ensures the Revenue Summary is always consistent with the other two cards.
   const computeRevForPeriod = (period: { start: Date; end: Date }) => {
     const roomRev = allRevenueBookings
-      .filter(b => { const d = new Date(b.dates.checkIn); return d >= period.start && d <= period.end })
-      .reduce((s: number, b: any) => s + Number(b.amount || 0), 0)
+      .filter(b => { const d = new Date(b.checkIn || b.dates?.checkIn || ''); return !isNaN(d.getTime()) && d >= period.start && d <= period.end })
+      .reduce((s: number, b: any) => s + Number(b.totalPrice || b.amount || 0), 0)
     const chargesRev = allChargesRaw
       .filter(c => {
+        if (Number(c.amount || 0) <= 0) return false // skip payment-offset records
         const d = new Date(c.createdAt || c.created_at || '')
         return !isNaN(d.getTime()) && d >= period.start && d <= period.end
       })
