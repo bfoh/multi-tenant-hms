@@ -574,21 +574,22 @@ export async function fetchBookingsForStaffWeek(
         const chargeCreator = c.createdBy || c.created_by || ''
         return chargeCreator === staffId
       })
-      const additionalCharges: ChargeLineSummary[] = rawCharges.map((c: any) => ({
-        id: c.id,
-        description: c.description || '',
-        category: c.category || 'other',
-        quantity: Number(c.quantity || 1),
-        unitPrice: Number(c.unitPrice || c.unit_price || 0),
-        amount: Number(c.amount || 0),
-        paymentMethod: normalizePaymentMethod(c.paymentMethod || c.payment_method || decodeChargePaymentMethod(c.notes)),
-        createdAt: c.createdAt || c.created_at || '',
-      }))
-      // Only positive charges count as revenue. Negative charges are payment records
-      // (e.g. "Payment - Stay Extension") and should not offset revenue totals.
-      const additionalChargesTotal = additionalCharges
-        .filter(c => c.amount > 0)
-        .reduce((s, c) => s + c.amount, 0)
+      // Only positive charges count as revenue. Negative charges are internal
+      // payment-offset records (e.g. "Payment - Stay Extension") and must not
+      // appear in any breakdown or total.
+      const additionalCharges: ChargeLineSummary[] = rawCharges
+        .filter((c: any) => Number(c.amount || 0) > 0)
+        .map((c: any) => ({
+          id: c.id,
+          description: c.description || '',
+          category: c.category || 'other',
+          quantity: Number(c.quantity || 1),
+          unitPrice: Number(c.unitPrice || c.unit_price || 0),
+          amount: Number(c.amount || 0),
+          paymentMethod: normalizePaymentMethod(c.paymentMethod || c.payment_method || decodeChargePaymentMethod(c.notes)),
+          createdAt: c.createdAt || c.created_at || '',
+        }))
+      const additionalChargesTotal = additionalCharges.reduce((s, c) => s + c.amount, 0)
 
       return {
         id: b.id,

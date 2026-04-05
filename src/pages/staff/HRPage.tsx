@@ -1773,7 +1773,7 @@ function StaffRevenueRow({
                             </TableRow>
                           </TableHeader>
                           <TableBody>
-                            {bookings.flatMap(b => b.additionalCharges).map(c => (
+                            {bookings.flatMap(b => b.additionalCharges).filter(c => (c.amount || 0) > 0).map(c => (
                               <TableRow key={c.id}>
                                 <TableCell className="text-xs">{c.description}</TableCell>
                                 <TableCell className="text-xs">{CATEGORY_ICONS_HR[c.category] || '📦'} {CHARGE_CATEGORIES[c.category as keyof typeof CHARGE_CATEGORIES] || c.category}</TableCell>
