@@ -974,8 +974,22 @@ export function ReservationsPage() {
       <GuestChargesDialog
         open={!!chargesDialog}
         onOpenChange={(open) => !open && setChargesDialog(null)}
-        booking={chargesDialog}
-        guest={chargesDialog ? guestMap.get(chargesDialog.guestId) : null}
+        booking={chargesDialog ? {
+          ...chargesDialog,
+          // Ensure roomNumber is available for the dialog header
+          roomNumber: (chargesDialog as any).roomNumber || roomMap.get(chargesDialog.roomId)?.roomNumber,
+        } : null}
+        guest={chargesDialog ? (() => {
+          // GUEST_SNAPSHOT is the authoritative name — captured at booking time.
+          // The guestId in the DB may point to a stale/old guest record.
+          const snapshotName = (chargesDialog as any).guestNameSnapshot
+          const snapshotEmail = (chargesDialog as any).guestEmailSnapshot
+          const dbGuest = guestMap.get(chargesDialog.guestId)
+          if (snapshotName) {
+            return { ...(dbGuest || { id: chargesDialog.guestId }), name: snapshotName, email: snapshotEmail || dbGuest?.email || '' }
+          }
+          return dbGuest || null
+        })() : null}
         onChargesUpdated={async () => {
           // Refresh charges data when charges are updated
           const charges = await db.bookingCharges?.list({ limit: 1000 }) || []

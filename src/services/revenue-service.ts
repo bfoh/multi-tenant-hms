@@ -505,9 +505,19 @@ export async function fetchBookingsForStaffWeek(
       // Never exceed the full room price
       staffRevenue = Math.min(staffRevenue, effectivePrice)
 
-      // Additional charges only shown/attributed for booking creators (charges belong to the booking)
+      // Additional charges attribution:
+      // • Booking creator sees ALL charges on their booking.
+      // • Other staff (check-in, check-out) see only charges THEY personally created
+      //   (e.g. stay extensions done by a different staff member).
+      // Negative charges are payment-offset records (e.g. "Payment - Stay Extension")
+      // and must NOT be counted as revenue — only positive amounts are revenue.
       const isCreator = creator === staffId
-      const rawCharges = isCreator ? (chargesByBookingId.get(b.id) || []) : []
+      const allBookingCharges = chargesByBookingId.get(b.id) || []
+      const rawCharges = allBookingCharges.filter((c: any) => {
+        if (isCreator) return true
+        const chargeCreator = c.createdBy || c.created_by || ''
+        return chargeCreator === staffId
+      })
       const additionalCharges: ChargeLineSummary[] = rawCharges.map((c: any) => ({
         id: c.id,
         description: c.description || '',
@@ -518,7 +528,11 @@ export async function fetchBookingsForStaffWeek(
         paymentMethod: normalizePaymentMethod(c.paymentMethod || c.payment_method || decodeChargePaymentMethod(c.notes)),
         createdAt: c.createdAt || c.created_at || '',
       }))
-      const additionalChargesTotal = additionalCharges.reduce((s, c) => s + c.amount, 0)
+      // Only positive charges count as revenue. Negative charges are payment records
+      // (e.g. "Payment - Stay Extension") and should not offset revenue totals.
+      const additionalChargesTotal = additionalCharges
+        .filter(c => c.amount > 0)
+        .reduce((s, c) => s + c.amount, 0)
 
       return {
         id: b.id,
@@ -540,11 +554,13 @@ export async function fetchBookingsForStaffWeek(
     })
 
   // ── Orphan charges ────────────────────────────────────────────────────────
-  // Charges created THIS WEEK on bookings CREATED by this staff member whose
-  // check-in date falls outside this week (not already covered by `matched`).
-  // Charges are always attributed to the booking creator, not check-in/out staff.
+  // Positive charges created THIS WEEK that belong to this staff member but
+  // whose booking check-in falls outside this week (not already in `matched`).
+  // Attribution: booking creator sees all charges on their bookings; any staff
+  // sees charges they personally created (e.g. stay extensions on other bookings).
+  // Negative charges (payment records) are excluded from revenue totals.
   const matchedIds = new Set(matched.map((b) => b.id))
-  // All booking IDs CREATED by this staff member (any date) — charges belong to creator
+  // All booking IDs CREATED by this staff member (any date)
   const allStaffBookingIds = new Set(
     (allBookings as any[])
       .filter((b: any) => (b.created_by || b.user_id || '') === staffId)
@@ -553,9 +569,15 @@ export async function fetchBookingsForStaffWeek(
 
   const orphanCharges: ChargeLineSummary[] = []
   for (const [bookingId, charges] of chargesByBookingId.entries()) {
-    if (!allStaffBookingIds.has(bookingId)) continue  // not this staff's booking
-    if (matchedIds.has(bookingId)) continue           // already counted in matched
+    if (matchedIds.has(bookingId)) continue  // already counted in matched
     for (const c of charges) {
+      const chargeCreator = c.createdBy || c.created_by || ''
+      const isBookingOwner = allStaffBookingIds.has(bookingId)
+      const isChargeCreator = chargeCreator === staffId
+      // Only include if staff owns the booking or created this specific charge
+      if (!isBookingOwner && !isChargeCreator) continue
+      // Only positive amounts are revenue (skip payment offset records)
+      if (Number(c.amount || 0) <= 0) continue
       const createdAt = c.createdAt || c.created_at || ''
       if (!createdAt) continue
       const d = new Date(createdAt)
