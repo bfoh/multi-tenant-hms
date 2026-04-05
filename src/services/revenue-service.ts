@@ -461,28 +461,39 @@ export async function fetchBookingsForStaffWeek(
 
       let staffRevenue = 0
 
+      // Whether the booking has already reached a stage where payment was collected
+      // but check_in_by / check_out_by columns don't have data yet (pre-migration).
+      const isAlreadyActive = b.status === 'checked-in' || b.status === 'checked-out'
+      const noCheckInTracking = !checkInBy && !checkOutBy
+
       if (creator === staffId) {
         if (!hasPaymentData) {
-          // Truly old booking with no payment tracking at all — backward compat: full price
+          // Old booking with no payment tracking at all — full price, backward compat
           staffRevenue = effectivePrice
         } else if (paymentStatus === 'full') {
           // Guest paid in full at booking time
           staffRevenue = effectivePrice
         } else if (amtAtBooking > 0) {
-          // Part payment at booking — only credit what was actually collected
+          // Part payment at booking — credit only what was actually collected
           staffRevenue = Math.min(amtAtBooking, effectivePrice)
+        } else if (isAlreadyActive && noCheckInTracking) {
+          // Pay-later booking that was checked in/out before check_in_by tracking existed.
+          // No other staff to attribute to, so credit the booking creator with the full amount.
+          staffRevenue = effectivePrice
         }
-        // else: pay-later (amtAtBooking = 0, paymentStatus = 'pending') → 0 credited now;
-        // remainder goes to check-in/check-out staff when they collect it
+        // else: pay-later, not yet checked in → 0 credited now;
+        // the remainder will be attributed to check-in/check-out staff when they collect it.
       }
 
       if (checkInBy === staffId) {
         if (amtAtCheckIn > 0) {
           staffRevenue += amtAtCheckIn
-        } else if (checkInBy && amtAtCheckIn === 0 && amtAtCheckOut === 0) {
-          // check_in_by is set but amount wasn't captured (transition period):
-          // give check-in staff the remaining after booking payment
-          const alreadyCredited = paymentStatus === 'full' ? effectivePrice : Math.min(amtAtBooking, effectivePrice)
+        } else {
+          // check_in_by is set but checkInAmountPaid wasn't captured (transition period):
+          // credit check-in staff with whatever remains after any booking payment
+          const alreadyCredited = paymentStatus === 'full'
+            ? effectivePrice
+            : Math.min(amtAtBooking, effectivePrice)
           staffRevenue += Math.max(0, effectivePrice - alreadyCredited)
         }
       }
