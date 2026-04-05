@@ -62,34 +62,37 @@ export function PropertiesPage() {
 
   const loadProperties = async () => {
     try {
-      // Load rooms AND bookings — use Supabase directly for both so a blink failure doesn't block rooms
+      // Use select('*') to avoid column-name errors if schema differs
       const [roomsResult, bookingsResult] = await Promise.all([
-        supabase.from('rooms').select('id, room_number, status, room_type_id, price, description').order('room_number'),
-        supabase.from('bookings').select('id, status, room_id, check_in, check_out, rooms(room_number)').limit(2000)
+        supabase.from('rooms').select('*').order('room_number'),
+        supabase.from('bookings').select('id, status, room_id, check_in, check_out, room_number').limit(2000)
       ])
+
+      if (roomsResult.error) console.error('[PropertiesPage] rooms fetch error:', roomsResult.error)
+      if (bookingsResult.error) console.error('[PropertiesPage] bookings fetch error:', bookingsResult.error)
 
       const data = (roomsResult.data || []).map((r: any) => ({
         id: r.id,
-        roomNumber: r.room_number,
-        name: r.room_number,
+        roomNumber: r.room_number || r.roomNumber || '',
+        name: r.name || r.room_number || r.roomNumber || '',
         status: r.status || 'available',
-        propertyTypeId: r.room_type_id,
-        basePrice: r.price || 0,
+        propertyTypeId: r.room_type_id || r.propertyTypeId || '',
+        basePrice: r.price || r.base_price || r.basePrice || 0,
         description: r.description || '',
-        maxGuests: 2, bedrooms: 1, bathrooms: 1
+        maxGuests: r.max_guests || r.maxGuests || 2,
+        bedrooms: 1, bathrooms: 1
       }))
 
-      // Normalize bookings to a consistent shape for availability check
+      // Normalize bookings — bookings may store room_number directly
       const allBookings = (bookingsResult.data || []).map((b: any) => ({
         id: b.id,
         status: b.status,
-        roomNumber: b.rooms?.room_number || '',
+        roomNumber: b.room_number || '',
         dates: { checkIn: b.check_in || '', checkOut: b.check_out || '' },
       }))
 
       setBookings(allBookings)
 
-      // Derive room type by id first, fallback to name, and compute display fields
       const propertiesWithPrices = data.map((prop: any) => {
         const matchingType =
           roomTypes.find((rt) => rt.id === prop.propertyTypeId) ||
@@ -97,16 +100,78 @@ export function PropertiesPage() {
         return {
           ...prop,
           roomTypeName: matchingType?.name || prop.propertyType || '',
-          displayPrice: matchingType?.basePrice ?? 0
+          displayPrice: matchingType?.basePrice ?? prop.basePrice ?? 0
         }
       })
 
-      setProperties(propertiesWithPrices)
+      console.log('[PropertiesPage] rooms loaded:', propertiesWithPrices.length)
+
+      // If no rooms found, try to seed from booking data (migration fallback)
+      if (propertiesWithPrices.length === 0) {
+        await _seedRoomsFromBookings(roomTypes)
+        // Re-fetch after seeding
+        const { data: seededRooms } = await supabase.from('rooms').select('*').order('room_number')
+        const seededData = (seededRooms || []).map((r: any) => {
+          const matchingType = roomTypes.find((rt) => rt.id === (r.room_type_id || r.propertyTypeId))
+          return {
+            id: r.id,
+            roomNumber: r.room_number || r.roomNumber || '',
+            name: r.name || r.room_number || '',
+            status: r.status || 'available',
+            propertyTypeId: r.room_type_id || '',
+            basePrice: r.price || r.base_price || 0,
+            description: r.description || '',
+            maxGuests: r.max_guests || 2,
+            bedrooms: 1, bathrooms: 1,
+            roomTypeName: matchingType?.name || '',
+            displayPrice: matchingType?.basePrice ?? 0,
+          }
+        })
+        setProperties(seededData)
+      } else {
+        setProperties(propertiesWithPrices)
+      }
     } catch (error) {
       console.error('Failed to load rooms:', error)
       toast.error('Failed to load rooms')
     } finally {
       setLoading(false)
+    }
+  }
+
+  /** Auto-seed rooms from existing bookings when rooms table is empty */
+  const _seedRoomsFromBookings = async (types: RoomType[]) => {
+    try {
+      // Fetch bookings that have room_number stored directly
+      const { data: bkData } = await supabase
+        .from('bookings')
+        .select('room_id, room_number, room_type_id')
+        .limit(2000)
+      if (!bkData || bkData.length === 0) return
+
+      // Collect unique room numbers with their room_type_id
+      const seen = new Map<string, { roomTypeId: string }>()
+      for (const b of bkData) {
+        const rn = (b.room_number || '').trim()
+        if (!rn || seen.has(rn)) continue
+        seen.set(rn, { roomTypeId: b.room_type_id || (types[0]?.id || '') })
+      }
+      if (seen.size === 0) return
+
+      console.log(`[PropertiesPage] Seeding ${seen.size} rooms from booking history`)
+      const inserts = Array.from(seen.entries()).map(([roomNumber, info]) => ({
+        id: crypto.randomUUID(),
+        room_number: roomNumber,
+        name: roomNumber,
+        room_type_id: info.roomTypeId || null,
+        status: 'available',
+        price: types.find(t => t.id === info.roomTypeId)?.basePrice || 0,
+        description: '',
+      }))
+      await supabase.from('rooms').insert(inserts)
+      toast.success(`${inserts.length} room${inserts.length !== 1 ? 's' : ''} imported from booking history`)
+    } catch (e) {
+      console.warn('[PropertiesPage] Room seeding failed:', e)
     }
   }
 
