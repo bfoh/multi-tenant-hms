@@ -60,7 +60,7 @@ export const standaloneSalesService = {
       quantity: data.quantity,
       unit_price: data.unitPrice,
       amount: data.amount,
-      notes: data.notes,
+      notes: data.notes || '',
       staff_id: data.staffId,
       staff_name: data.staffName,
       sale_date: data.saleDate,
@@ -68,7 +68,16 @@ export const standaloneSalesService = {
       created_at: new Date().toISOString(),
     }
     const { data: inserted, error } = await supabase.from('standalone_sales').insert(record).select().single()
-    if (error) throw error
+    if (error) {
+      console.error('[standaloneSalesService] addSale error:', error)
+      if (error.code === '42P01') {
+        throw new Error('The standalone_sales table does not exist. Please run the database migration SQL in your Supabase SQL Editor.')
+      }
+      if (error.code === '42501' || error.message?.includes('permission') || error.message?.includes('policy')) {
+        throw new Error('Permission denied. Please ensure the standalone_sales table has RLS disabled or proper policies in Supabase.')
+      }
+      throw new Error(error.message || 'Failed to save sale to database')
+    }
     return _toCC(inserted)
   },
 

@@ -58,16 +58,19 @@ ALTER TABLE IF EXISTS bookings ADD COLUMN IF NOT EXISTS check_out_by_name text;
 ALTER TABLE IF EXISTS bookings ADD COLUMN IF NOT EXISTS check_in_amount_paid decimal(12,2) DEFAULT 0;
 ALTER TABLE IF EXISTS bookings ADD COLUMN IF NOT EXISTS check_out_amount_paid decimal(12,2) DEFAULT 0;
 
--- 5. Disable RLS on these tables so staff can read/write freely
---    (the app uses Supabase service-role-equivalent anon key with these tables)
-ALTER TABLE standalone_sales DISABLE ROW LEVEL SECURITY;
-ALTER TABLE hr_weekly_revenue DISABLE ROW LEVEL SECURITY;
+-- 5. Enable RLS + open policies so all authenticated users can read/write
+--    (preferred over DISABLE RLS which can cause permission issues in some Supabase plans)
+ALTER TABLE standalone_sales ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "allow_all_standalone_sales" ON standalone_sales;
+CREATE POLICY "allow_all_standalone_sales" ON standalone_sales FOR ALL USING (true) WITH CHECK (true);
 
--- 6. If RLS is already enabled and you prefer policies over disabling, use these instead:
--- DROP POLICY IF EXISTS "allow_all_standalone_sales" ON standalone_sales;
--- CREATE POLICY "allow_all_standalone_sales" ON standalone_sales FOR ALL USING (true) WITH CHECK (true);
--- DROP POLICY IF EXISTS "allow_all_hr_weekly_revenue" ON hr_weekly_revenue;
--- CREATE POLICY "allow_all_hr_weekly_revenue" ON hr_weekly_revenue FOR ALL USING (true) WITH CHECK (true);
+ALTER TABLE hr_weekly_revenue ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "allow_all_hr_weekly_revenue" ON hr_weekly_revenue;
+CREATE POLICY "allow_all_hr_weekly_revenue" ON hr_weekly_revenue FOR ALL USING (true) WITH CHECK (true);
+
+-- 6. Also disable RLS as a belt-and-suspenders fallback (run whichever works for your plan)
+-- ALTER TABLE standalone_sales DISABLE ROW LEVEL SECURITY;
+-- ALTER TABLE hr_weekly_revenue DISABLE ROW LEVEL SECURITY;
 
 -- 7. Grant access to anon and authenticated roles
 GRANT ALL ON standalone_sales TO anon, authenticated;

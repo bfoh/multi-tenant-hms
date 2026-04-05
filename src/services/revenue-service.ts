@@ -663,11 +663,14 @@ export async function getOrCreateWeekReport(
   )
 
   // Always recalculate from live bookings so counts/revenue stay accurate
-  const { bookings, totalRevenue, bookingCount } = await fetchBookingsForStaffWeek(
+  const weekResult = await fetchBookingsForStaffWeek(
     staffId,
     week.weekStart,
     week.weekEnd
   )
+  const { bookings, bookingCount } = weekResult
+  // Persist grandRevenue (room + charges + standalone sales) so HR totals are accurate
+  const totalRevenue = weekResult.grandRevenue
   const bookingIds = JSON.stringify(bookings.map((b) => b.id))
   const now = new Date().toISOString()
 

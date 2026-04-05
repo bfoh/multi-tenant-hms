@@ -72,8 +72,9 @@ export function LogSaleDialog({ open, onOpenChange, staffId, staffName, onSucces
       reset()
       onOpenChange(false)
       onSuccess?.()
-    } catch (e) {
-      toast.error('Failed to log sale')
+    } catch (e: any) {
+      const msg = e?.message || 'Failed to log sale'
+      toast.error(msg)
       console.error('[LogSaleDialog]', e)
     } finally {
       setSaving(false)
