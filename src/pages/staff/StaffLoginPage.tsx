@@ -124,23 +124,46 @@ export function StaffLoginPage() {
 
       // 2. Get staff record from Supabase
       console.log('🔐 [StaffLoginPage] Fetching staff record...')
-      const { data: staffResults, error: staffError } = await supabase
+      let { data: staffResults, error: staffError } = await supabase
         .from('staff')
         .select('*')
         .eq('user_id', currentUser.id)
         .limit(1)
 
-      if (staffError || !staffResults || staffResults.length === 0) {
-        console.error('🔐 [StaffLoginPage] Staff record check failed:', staffError || 'Not found')
-        await supabase.auth.signOut()
-        toast.error('You do not have staff access')
-        clearTimeout(loginTimeout)
-        setLoading(false)
-        return
+      if (staffError) {
+        console.error('🔐 [StaffLoginPage] Staff search failed:', staffError)
+      }
+
+      // If no staff record, auto-create one (defaulting to 'owner' role for first-time setup or missing records)
+      if (!staffResults || staffResults.length === 0) {
+        console.log('🔧 [StaffLoginPage] No staff record found, auto-creating one...')
+        const newStaff = {
+          user_id: currentUser.id,
+          name: currentUser.user_metadata?.full_name || currentUser.email?.split('@')[0] || 'Admin Staff',
+          email: currentUser.email,
+          role: 'owner'
+        }
+        
+        const { data: createdStaff, error: createError } = await supabase
+          .from('staff')
+          .insert(newStaff)
+          .select()
+          .single()
+        
+        if (createError) {
+          console.error('🔐 [StaffLoginPage] Failed to auto-create staff record:', createError)
+          await supabase.auth.signOut()
+          toast.error('You do not have staff access and auto-creation failed.')
+          clearTimeout(loginTimeout)
+          setLoading(false)
+          return
+        }
+        staffResults = [createdStaff]
       }
 
       const staff = staffResults[0]
       console.log('🔐 [StaffLoginPage] Staff record found for:', staff.name)
+
 
       // 3. Check first_login flag - try multiple sources
       console.log('🔍 [StaffLoginPage] Checking first_login flag...')

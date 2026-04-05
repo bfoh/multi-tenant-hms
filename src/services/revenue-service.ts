@@ -113,7 +113,8 @@ export interface WeeklyRevenueReport {
   totalRevenue: number
   bookingCount: number
   bookingIds: string    // JSON-encoded string array of booking IDs
-  status: 'draft' | 'submitted' | 'reviewed'
+  status: 'draft' | 'submitted' | 'reviewed' | 'init'
+
   notes: string         // Staff's own notes on the week
   adminNotes: string    // Admin feedback
   reviewedBy: string    // Admin user ID
@@ -287,8 +288,9 @@ export async function fetchBookingsForStaffWeek(
 
   const matched: BookingSummary[] = ((allBookings || []) as any[])
     .filter((b: any) => {
-      const creator = b.createdBy || b.created_by || ''
+      const creator = b.createdBy || b.created_by || b.userId || b.user_id || ''
       if (creator !== staffId) return false
+
       if (!['checked-in', 'checked-out'].includes(b.status)) return false
       const checkIn = b.checkIn || b.check_in || ''
       if (!checkIn) return false

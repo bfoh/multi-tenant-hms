@@ -148,6 +148,9 @@ export function GuestsPage() {
         // Priority: 1. Checked-in (Active) 2. Most recent check-in date
         const bookingRoomNumber = roomMap.get(booking.roomId) || booking.roomNumber || ''
 
+        const resolvedCreatedBy = booking.createdBy || booking.created_by
+        const resolvedCheckInBy = booking.checkInBy || booking.check_in_by
+        const resolvedCheckOutBy = booking.checkOutBy || booking.check_out_by
         const newBookingObj = {
           checkIn: booking.checkIn,
           checkOut: booking.checkOut,
@@ -155,12 +158,12 @@ export function GuestsPage() {
           roomNumber: bookingRoomNumber,
           createdAt: booking.createdAt,
           source: booking.source,
-          createdBy: booking.createdBy || booking.created_by,
-          createdByName: booking.createdByName || booking.created_by_name,
-          checkInBy: booking.checkInBy || booking.check_in_by,
-          checkInByName: booking.checkInByName || booking.check_in_by_name,
-          checkOutBy: booking.checkOutBy || booking.check_out_by,
-          checkOutByName: booking.checkOutByName || booking.check_out_by_name
+          createdBy: resolvedCreatedBy,
+          createdByName: booking.createdByName || booking.created_by_name || staffMap.get(resolvedCreatedBy) || null,
+          checkInBy: resolvedCheckInBy,
+          checkInByName: booking.checkInByName || booking.check_in_by_name || staffMap.get(resolvedCheckInBy) || null,
+          checkOutBy: resolvedCheckOutBy,
+          checkOutByName: booking.checkOutByName || booking.check_out_by_name || staffMap.get(resolvedCheckOutBy) || null,
         }
 
         if (!current.lastBooking) {

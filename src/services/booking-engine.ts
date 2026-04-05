@@ -439,6 +439,16 @@ class BookingEngine {
     const currentUser = await supabase.auth.getUser().then(r => r.data.user).catch(() => null)
     console.log('[BookingEngine] Current user:', currentUser?.id || 'No user authenticated')
 
+    // Resolve staff name — staff table is source of truth, fallback to passed name or auth metadata
+    let resolvedStaffName: string | undefined = bookingData.createdByName
+    if (currentUser?.id) {
+      const { data: staffRow } = await supabase.from('staff').select('name').eq('user_id', currentUser.id).maybeSingle()
+      if (staffRow?.name) resolvedStaffName = staffRow.name
+    }
+    if (!resolvedStaffName) {
+      resolvedStaffName = currentUser?.user_metadata?.full_name || currentUser?.user_metadata?.name || currentUser?.email || undefined
+    }
+
     // ROBUST METADATA EXTRACTION
     const groupData = {
       groupId: (bookingData as any).groupId,
@@ -605,8 +615,8 @@ class BookingEngine {
       amountPaid: bookingData.amountPaid ?? 0,
       paymentStatus: bookingData.paymentStatus ?? 'pending',
       notes: bookingData.notes,
-      createdBy: bookingData.createdBy,
-      createdByName: bookingData.createdByName,
+      createdBy: bookingData.createdBy || currentUser?.id,
+      createdByName: resolvedStaffName,
       createdAt: now,
       updatedAt: now,
       synced: true,

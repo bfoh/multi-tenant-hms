@@ -19,7 +19,6 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
-import { blink } from '@/blink/client'
 import { supabase } from '@/lib/supabase'
 import { toast } from 'sonner'
 import { activityLogService } from '@/services/activity-log-service'
