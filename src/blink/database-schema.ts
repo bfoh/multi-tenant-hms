@@ -13,7 +13,6 @@ export interface ActivityLogRecord {
   entityId: string
   details: string // JSON string
   userId: string
-  metadata: string // JSON string
   createdAt: string
 }
 
@@ -80,10 +79,6 @@ export async function initializeDatabaseSchema(): Promise<void> {
                 version: '1.0'
               }),
               userId: 'system',
-              metadata: JSON.stringify({
-                source: 'schema_initialization',
-                table: 'activityLogs'
-              }),
               createdAt: new Date().toISOString(),
             }
 

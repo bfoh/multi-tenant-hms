@@ -1,5 +1,6 @@
 import { supabase } from '@/lib/supabase'
 import { bookingChargesService } from './booking-charges-service'
+import { activityLogService } from './activity-log-service'
 
 function _toCC(obj: Record<string, any>) {
     const m: Record<string, string> = {
@@ -393,6 +394,22 @@ class StayExtensionService {
                     }
                 }
             }
+
+            // Log the activity
+            activityLogService.log({
+                action: 'stay_extended',
+                entityType: 'booking',
+                entityId: bookingId,
+                details: {
+                    newCheckoutDate,
+                    additionalNights,
+                    extensionCost,
+                    roomChanged: !!newRoomId && newRoomId !== booking.roomId,
+                    newRoomId: newRoomId || booking.roomId,
+                    bookingId
+                },
+                userId: userId || 'system'
+            }).catch(err => console.error('[StayExtension] Failed to log activity:', err))
 
             console.log('[StayExtension] Extension completed:', {
                 newCheckout: newCheckoutDate,

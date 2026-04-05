@@ -12,19 +12,7 @@ export function AuthLogger() {
   const isInitialized = useRef(false)
 
   useEffect(() => {
-    // 1. Initial check on mount
-    const checkInitialSession = async () => {
-      const { data: { session } } = await supabase.auth.getSession()
-      if (session?.user) {
-        console.log('🛡️ [AuthLogger] Initial session found:', session.user.email)
-        activityLogService.setCurrentUser(session.user.id)
-        lastUserId.current = session.user.id
-      }
-      isInitialized.current = true
-    }
-    checkInitialSession()
-
-    // 2. Listen for state changes (Login, Logout, Token Refresh)
+    // 1. Listen for state changes (Login, Logout, Token Refresh, Initial Session)
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       const user = session?.user || null
       const currentUserId = user?.id || null
@@ -38,16 +26,19 @@ export function AuthLogger() {
       // Ensure service always has the correct user context
       activityLogService.setCurrentUser(currentUserId)
 
-      // Handle Login/Logout Auditing
-      if (event === 'SIGNED_IN' && currentUserId && lastUserId.current !== currentUserId) {
-        // User logged in (or session restored)
-        console.log('🛡️ [AuthLogger] Handling SIGNED_IN tasks...')
+      // Handle Login Auditing: 
+      // We log if we have a user and:
+      // a) event is SIGNED_IN (actual login or session restore)
+      // b) event is INITIAL_SESSION (first load with session)
+      // AND we haven't already logged this specific user in this browser session (ref-based check)
+      if ((event === 'SIGNED_IN' || event === 'INITIAL_SESSION') && currentUserId && lastUserId.current !== currentUserId) {
+        console.log('🛡️ [AuthLogger] Auditing SESSION_START / LOGIN tasks...')
         
         // Execute post-login tasks in parallel, ensuring they don't block each other
         const tasks = [
           activityLogService.logUserLogin(currentUserId, {
             email: user?.email || '',
-            source: 'authenticated_session'
+            source: event === 'SIGNED_IN' ? 'login' : 'session_restart'
           })
         ]
 
@@ -65,6 +56,7 @@ export function AuthLogger() {
           }
         })
 
+        // ONLY update lastUserId AFTER we attempt to log
         lastUserId.current = currentUserId
       } 
       
@@ -80,8 +72,8 @@ export function AuthLogger() {
         }
       }
 
-      // If ID changed without an event (rare but possible), update ref
-      if (currentUserId !== lastUserId.current && event !== 'INITIAL_SESSION') {
+      // Safeguard: If the ID changed but no event fired (rare), sync the ref
+      if (currentUserId && currentUserId !== lastUserId.current && !['SIGNED_IN', 'INITIAL_SESSION'].includes(event)) {
          lastUserId.current = currentUserId
       }
     })

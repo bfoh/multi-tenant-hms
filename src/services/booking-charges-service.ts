@@ -1,5 +1,6 @@
 import { supabase } from '@/lib/supabase'
 import { BookingCharge, ChargeCategory } from '@/types'
+import { activityLogService } from './activity-log-service'
 
 // Category display names for UI
 export const CHARGE_CATEGORIES: Record<ChargeCategory, string> = {
@@ -116,6 +117,23 @@ class BookingChargesService {
                 .single()
 
             if (error) throw error
+            
+            // Log the activity
+            activityLogService.log({
+                action: 'added_charge',
+                entityType: 'booking',
+                entityId: data.bookingId,
+                details: {
+                    chargeId: inserted.id,
+                    description: data.description,
+                    category: data.category,
+                    amount,
+                    quantity: data.quantity,
+                    unitPrice: data.unitPrice,
+                    bookingId: data.bookingId
+                },
+                userId: data.createdBy || 'system'
+            }).catch(err => console.error('[BookingChargesService] Failed to log activity:', err))
 
             console.log('[BookingChargesService] Charge added:', inserted.id)
             return enrichCharge({
@@ -173,6 +191,22 @@ class BookingChargesService {
 
             if (updateError) throw updateError
 
+            // Log the activity
+            activityLogService.log({
+                action: 'updated_charge',
+                entityType: 'booking',
+                entityId: updated.booking_id,
+                details: {
+                    chargeId,
+                    description: updated.description,
+                    category: updated.category,
+                    amount,
+                    previousAmount: existing.amount,
+                    bookingId: updated.booking_id
+                },
+                userId: 'system' // Could be improved if we pass userId to updateCharge
+            }).catch(err => console.error('[BookingChargesService] Failed to log activity:', err))
+
             console.log('[BookingChargesService] Charge updated:', chargeId)
             return enrichCharge({
                 id: updated.id, bookingId: updated.booking_id, description: updated.description,
@@ -212,6 +246,18 @@ class BookingChargesService {
                 .delete()
                 .eq('id', chargeId)
             if (deleteError) throw deleteError
+
+            // Log the activity
+            activityLogService.log({
+                action: 'deleted_charge',
+                entityType: 'booking',
+                entityId: existing.booking_id,
+                details: {
+                    chargeId,
+                    bookingId: existing.booking_id
+                },
+                userId: 'system'
+            }).catch(err => console.error('[BookingChargesService] Failed to log activity:', err))
 
             console.log('[BookingChargesService] Charge deleted:', chargeId)
             return true

@@ -211,6 +211,10 @@ export function ActivityLogsPage() {
       case 'cancelled': return 'bg-red-50 text-red-700 ring-1 ring-red-200'
       case 'login': return 'bg-violet-50 text-violet-700 ring-1 ring-violet-200'
       case 'logout': return 'bg-gray-50 text-gray-700 ring-1 ring-gray-200'
+      case 'added_charge': return 'bg-amber-50 text-amber-700 ring-1 ring-amber-200'
+      case 'updated_charge': return 'bg-sky-50 text-sky-700 ring-1 ring-sky-200'
+      case 'deleted_charge': return 'bg-rose-50 text-rose-700 ring-1 ring-rose-200'
+      case 'stay_extended': return 'bg-fuchsia-50 text-fuchsia-700 ring-1 ring-fuchsia-200'
       default: return 'bg-gray-50 text-gray-700 ring-1 ring-gray-200'
     }
   }
@@ -301,6 +305,35 @@ export function ActivityLogsPage() {
       let message = 'Authentication event'
       if (ipAddress && ipAddress !== 'unknown') {
         message += ` from IP ${ipAddress}`
+      }
+      return message
+    }
+
+    if (details.category && details.amount !== undefined) {
+      // Charge-related details (added/updated charge)
+      const category = details.category.replace(/_/g, ' ')
+      const amount = details.amount
+      const description = details.description || 'Service'
+      const quantity = details.quantity
+      
+      let message = `Added ${category}: ${description}`
+      if (quantity && quantity > 1) {
+        message += ` (x${quantity})`
+      }
+      message += ` - GH₵${Math.abs(amount).toFixed(2)}`
+      
+      return message
+    }
+
+    if (details.newCheckoutDate && details.additionalNights) {
+      // Stay extension details
+      const nights = details.additionalNights
+      const newCheckOut = format(new Date(details.newCheckoutDate), 'MMM d, yyyy')
+      const cost = details.extensionCost
+      
+      let message = `Extended stay by ${nights} night${nights > 1 ? 's' : ''} until ${newCheckOut}`
+      if (cost) {
+        message += ` - Cost: GH₵${cost.toFixed(2)}`
       }
       return message
     }
@@ -641,6 +674,10 @@ export function ActivityLogsPage() {
                 <SelectItem value="completed">Completed</SelectItem>
                 <SelectItem value="login">Login</SelectItem>
                 <SelectItem value="logout">Logout</SelectItem>
+                <SelectItem value="added_charge">Add Charge</SelectItem>
+                <SelectItem value="updated_charge">Update Charge</SelectItem>
+                <SelectItem value="deleted_charge">Delete Charge</SelectItem>
+                <SelectItem value="stay_extended">Stay Extension</SelectItem>
               </SelectContent>
             </Select>
 

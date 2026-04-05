@@ -19,6 +19,10 @@ export type ActivityAction =
   | 'imported'
   | 'login'
   | 'logout'
+  | 'added_charge'
+  | 'updated_charge'
+  | 'deleted_charge'
+  | 'stay_extended'
 
 export type EntityType =
   | 'booking'
@@ -41,12 +45,7 @@ export interface ActivityLogData {
   entityId: string
   details: Record<string, any>
   userId?: string
-  metadata?: {
-    ipAddress?: string
-    userAgent?: string
-    source?: string
-    [key: string]: any
-  }
+  userId?: string
 }
 
 export interface ActivityLog extends ActivityLogData {
@@ -189,6 +188,8 @@ class ActivityLogService {
    * to the caller so that main operations (like booking deletion) are not affected
    */
   public async log(data: ActivityLogData): Promise<void> {
+    console.log(`📡 [ActivityLog] Attempting to log: ${data.action} on ${data.entityType} (${data.entityId})`)
+    
     // 5-second timeout promise
     const timeoutPromise = new Promise<never>((_, reject) =>
       setTimeout(() => reject(new Error('Activity log timeout after 5s')), 5000)
@@ -196,38 +197,51 @@ class ActivityLogService {
 
     try {
       const userId = data.userId || this.currentUserId || 'system'
+      
+      // Fallback for randomUUID (some environments/older browsers)
+      const logId = (typeof crypto !== 'undefined' && crypto.randomUUID) 
+        ? crypto.randomUUID() 
+        : `log_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`
+
       const logEntry: any = {
-        id: crypto.randomUUID(),
+        id: logId,
         action: data.action,
         entity_type: data.entityType,
         entity_id: data.entityId,
         details: JSON.stringify(data.details || {}),
         user_id: userId,
         created_at: new Date().toISOString(),
-      }
-
-      if (data.metadata) {
-        logEntry.metadata = JSON.stringify(data.metadata)
+        // metadata column removed due to schema mismatch in production DB
       }
 
       // If offline, queue the log
       if (!this.isOnline) {
+        console.warn(`⏳ [ActivityLog] Offline: Queued ${data.action} activity`)
         this.pendingLogs.push(data)
         return
       }
 
+      console.log(`🚀 [ActivityLog] Inserting into db:`, logEntry)
+
       // Race the insertion against a 5s timeout
-      const { error: logError } = await Promise.race([
-        supabase.from('activity_logs').insert(logEntry),
+      const { data: result, error: logError } = await Promise.race([
+        supabase.from('activity_logs').insert(logEntry).select(),
         timeoutPromise as any
       ])
 
       if (logError) {
-        console.error('[ActivityLog] Database insertion failed:', logError.message)
+        console.error('❌ [ActivityLog] Database insertion failed!', {
+          error: logError.message,
+          code: logError.code,
+          details: logError.details,
+          hint: logError.hint
+        })
         this.pendingLogs.push(data)
+      } else {
+        console.log(`✅ [ActivityLog] Activity logged successfully: ${data.action}`)
       }
     } catch (error: any) {
-      console.error('[ActivityLog] Non-blocking logging error:', error.message || error)
+      console.error('💥 [ActivityLog] Non-blocking logging error:', error.message || error)
       try {
         this.pendingLogs.push(data)
       } catch (e) {}
@@ -538,12 +552,10 @@ class ActivityLogService {
         email: userDetails.email,
         role: userDetails.role,
         loginAt: new Date().toISOString(),
-      },
-      userId,
-      metadata: {
         userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'unknown',
         source: 'web',
       },
+      userId,
     })
   }
 
@@ -651,7 +663,6 @@ class ActivityLogService {
             entityId: row.entity_id,
             details: typeof row.details === 'string' ? JSON.parse(row.details || '{}') : row.details || {},
             userId: row.user_id,
-            metadata: typeof row.metadata === 'string' ? JSON.parse(row.metadata || '{}') : row.metadata || {},
             createdAt: row.created_at,
           }
         } catch (parseError) {
@@ -664,7 +675,6 @@ class ActivityLogService {
             entityId: row.entity_id || 'unknown',
             details: {},
             userId: row.user_id || 'unknown',
-            metadata: {},
             createdAt: row.created_at || new Date().toISOString(),
           }
         }
