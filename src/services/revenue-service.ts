@@ -111,10 +111,10 @@ const _revenueDb = {
         notes: record.notes,
         admin_notes: record.adminNotes,
         reviewed_by: record.reviewedBy,
-        reviewed_at: record.reviewedAt,
-        submitted_at: record.submittedAt,
-        created_at: record.createdAt,
-        updated_at: record.updatedAt,
+        reviewed_at: record.reviewedAt || null,
+        submitted_at: record.submittedAt || null,
+        created_at: record.createdAt || null,
+        updated_at: record.updatedAt || null,
       })
       if (error) console.warn('[hr_weekly_revenue] create failed:', error)
     },
@@ -128,9 +128,9 @@ const _revenueDb = {
       if (payload.notes !== undefined) snake.notes = payload.notes
       if (payload.adminNotes !== undefined) snake.admin_notes = payload.adminNotes
       if (payload.reviewedBy !== undefined) snake.reviewed_by = payload.reviewedBy
-      if (payload.reviewedAt !== undefined) snake.reviewed_at = payload.reviewedAt
-      if (payload.submittedAt !== undefined) snake.submitted_at = payload.submittedAt
-      if (payload.updatedAt !== undefined) snake.updated_at = payload.updatedAt
+      if (payload.reviewedAt !== undefined) snake.reviewed_at = payload.reviewedAt || null
+      if (payload.submittedAt !== undefined) snake.submitted_at = payload.submittedAt || null
+      if (payload.updatedAt !== undefined) snake.updated_at = payload.updatedAt || null
       const { error } = await supabase.from('hr_weekly_revenue').update(snake).eq('id', id)
       if (error) console.warn('[hr_weekly_revenue] update failed:', error)
     },
