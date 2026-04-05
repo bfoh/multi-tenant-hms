@@ -34,7 +34,22 @@ const _revenueDb = {
   bookings: {
     list: async (opts?: { limit?: number }) => {
       const { data } = await supabase.from('bookings').select('*').limit(opts?.limit || 2000)
-      return data || []
+      return (data || []).map((b: any) => ({
+        ...b,
+        // camelCase aliases so callers don't need to handle both forms
+        checkIn: b.check_in,
+        checkOut: b.check_out,
+        roomId: b.room_id,
+        guestId: b.guest_id,
+        totalPrice: b.total_price,
+        finalAmount: b.final_amount,
+        discountAmount: b.discount_amount,
+        paymentMethod: b.payment_method,
+        specialRequests: b.special_requests,
+        createdBy: b.created_by,
+        createdAt: b.created_at,
+        userId: b.user_id,
+      }))
     },
   },
   rooms: {
@@ -52,7 +67,13 @@ const _revenueDb = {
   bookingCharges: {
     list: async (opts?: { limit?: number }) => {
       const { data } = await supabase.from('booking_charges').select('*').limit(opts?.limit || 5000)
-      return data || []
+      return (data || []).map((c: any) => ({
+        ...c,
+        bookingId: c.booking_id,
+        unitPrice: c.unit_price,
+        paymentMethod: c.payment_method,
+        createdAt: c.created_at,
+      }))
     },
   },
   hr_weekly_revenue: {
