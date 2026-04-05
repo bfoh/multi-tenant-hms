@@ -365,22 +365,25 @@ export async function fetchBookingsForStaffWeek(
   /**
    * Parse the amount that was paid at booking time from the PAYMENT_DATA
    * comment embedded in special_requests.
+   *
+   * hasPaymentData = true  → explicit tracking exists (full / part / pay-later)
+   * hasPaymentData = false → old booking with no payment tracking; fall back to full price
    */
-  function _parseBookingPayment(b: any): { amountPaid: number; paymentStatus: string } {
+  function _parseBookingPayment(b: any): { amountPaid: number; paymentStatus: string; hasPaymentData: boolean } {
     const sr = b.special_requests || b.specialRequests || ''
     if (sr) {
       const m = (sr as string).match(/<!-- PAYMENT_DATA:(.*?) -->/)
       if (m?.[1]) {
         try {
           const pd = JSON.parse(m[1])
-          return { amountPaid: pd.amountPaid || 0, paymentStatus: pd.paymentStatus || 'pending' }
+          return { amountPaid: pd.amountPaid || 0, paymentStatus: pd.paymentStatus || 'pending', hasPaymentData: true }
         } catch { /* ignore */ }
       }
     }
-    return {
-      amountPaid: Number(b.amountPaid || b.amount_paid || 0),
-      paymentStatus: b.paymentStatus || b.payment_status || 'pending',
-    }
+    const amountPaid = Number(b.amountPaid || b.amount_paid || 0)
+    const paymentStatus = b.paymentStatus || b.payment_status || ''
+    // hasPaymentData is true only when a direct column has explicit data
+    return { amountPaid, paymentStatus, hasPaymentData: amountPaid > 0 || !!paymentStatus }
   }
 
   const STATIC_RATES: Record<string, number> = {
@@ -441,41 +444,55 @@ export async function fetchBookingsForStaffWeek(
       const effectivePrice = discountAmt > 0 ? Math.max(0, rawPrice - discountAmt) : rawPrice
 
       // ── Revenue attribution ──────────────────────────────────────────────
-      // Determine this staff member's share of the booking's room revenue.
-      //
-      // NEW bookings (check_in_by is set): revenue is split by payment stage:
-      //   • booking staff  → amount paid at reservation time
+      // Revenue is always split by payment stage:
+      //   • booking staff  → amount actually paid at reservation time
       //   • check-in staff → amount collected at check-in
       //   • check-out staff → any remaining balance collected at check-out
       //
-      // LEGACY bookings (check_in_by not set): full revenue to booking creator.
+      // Backward-compat: if PAYMENT_DATA was never stored (truly old booking),
+      // hasPaymentData is false and we credit the full price to the creator.
       const creator = b.createdBy || b.created_by || b.userId || b.user_id || ''
       const checkInBy = b.checkInBy || ''
       const checkOutBy = b.checkOutBy || ''
-      const isNewAttribution = !!checkInBy  // check_in_by being set = new system
+
+      const { amountPaid: amtAtBooking, paymentStatus, hasPaymentData } = _parseBookingPayment(b)
+      const amtAtCheckIn = Number(b.checkInAmountPaid || 0)
+      const amtAtCheckOut = Number(b.checkOutAmountPaid || 0)
 
       let staffRevenue = 0
-      if (!isNewAttribution) {
-        // Legacy: all room revenue goes to the booking creator
-        if (creator === staffId) staffRevenue = effectivePrice
-      } else {
-        // New staged attribution
-        const { amountPaid: amtAtBooking } = _parseBookingPayment(b)
-        const amtAtCheckIn = Number(b.checkInAmountPaid || 0)
-        const amtAtCheckOut = Number(b.checkOutAmountPaid || 0)
-        // Any untracked balance (edge case: check-in recorded but amount not captured)
-        const tracked = amtAtBooking + amtAtCheckIn + amtAtCheckOut
-        const untracked = Math.max(0, effectivePrice - tracked)
 
-        // Assign untracked remainder to check-in staff (most likely collector)
-        const effectiveCheckIn = amtAtCheckIn + untracked
-
-        if (creator === staffId) staffRevenue += amtAtBooking
-        if (checkInBy === staffId) staffRevenue += effectiveCheckIn
-        if (checkOutBy === staffId) staffRevenue += amtAtCheckOut
-        // Never exceed the full room price
-        staffRevenue = Math.min(staffRevenue, effectivePrice)
+      if (creator === staffId) {
+        if (!hasPaymentData) {
+          // Truly old booking with no payment tracking at all — backward compat: full price
+          staffRevenue = effectivePrice
+        } else if (paymentStatus === 'full') {
+          // Guest paid in full at booking time
+          staffRevenue = effectivePrice
+        } else if (amtAtBooking > 0) {
+          // Part payment at booking — only credit what was actually collected
+          staffRevenue = Math.min(amtAtBooking, effectivePrice)
+        }
+        // else: pay-later (amtAtBooking = 0, paymentStatus = 'pending') → 0 credited now;
+        // remainder goes to check-in/check-out staff when they collect it
       }
+
+      if (checkInBy === staffId) {
+        if (amtAtCheckIn > 0) {
+          staffRevenue += amtAtCheckIn
+        } else if (checkInBy && amtAtCheckIn === 0 && amtAtCheckOut === 0) {
+          // check_in_by is set but amount wasn't captured (transition period):
+          // give check-in staff the remaining after booking payment
+          const alreadyCredited = paymentStatus === 'full' ? effectivePrice : Math.min(amtAtBooking, effectivePrice)
+          staffRevenue += Math.max(0, effectivePrice - alreadyCredited)
+        }
+      }
+
+      if (checkOutBy === staffId) {
+        staffRevenue += amtAtCheckOut
+      }
+
+      // Never exceed the full room price
+      staffRevenue = Math.min(staffRevenue, effectivePrice)
 
       // Additional charges only shown/attributed for booking creators (charges belong to the booking)
       const isCreator = creator === staffId
