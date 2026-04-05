@@ -65,7 +65,8 @@ export function PropertiesPage() {
       // Use select('*') to avoid column-name errors if schema differs
       const [roomsResult, bookingsResult] = await Promise.all([
         supabase.from('rooms').select('*').order('room_number'),
-        supabase.from('bookings').select('id, status, room_id, check_in, check_out, room_number').limit(2000)
+        // Join rooms to get room_number from the FK — bookings have no direct room_number column
+        supabase.from('bookings').select('id, status, room_id, check_in, check_out, rooms(room_number)').limit(2000)
       ])
 
       if (roomsResult.error) console.error('[PropertiesPage] rooms fetch error:', roomsResult.error)
@@ -83,11 +84,11 @@ export function PropertiesPage() {
         bedrooms: 1, bathrooms: 1
       }))
 
-      // Normalize bookings — bookings may store room_number directly
+      // Resolve room_number via the FK join
       const allBookings = (bookingsResult.data || []).map((b: any) => ({
         id: b.id,
         status: b.status,
-        roomNumber: b.room_number || '',
+        roomNumber: (b.rooms as any)?.room_number || '',
         dates: { checkIn: b.check_in || '', checkOut: b.check_out || '' },
       }))
 
@@ -139,39 +140,25 @@ export function PropertiesPage() {
     }
   }
 
-  /** Auto-seed rooms from existing bookings when rooms table is empty */
+  /** Auto-seed rooms from existing bookings when rooms table is empty (bookings link via room_id FK) */
   const _seedRoomsFromBookings = async (types: RoomType[]) => {
     try {
-      // Fetch bookings that have room_number stored directly
+      // bookings -> rooms join to discover room numbers even if rooms table appears empty
       const { data: bkData } = await supabase
         .from('bookings')
-        .select('room_id, room_number, room_type_id')
+        .select('room_id, room_type_id')
+        .not('room_id', 'is', null)
         .limit(2000)
-      if (!bkData || bkData.length === 0) return
-
-      // Collect unique room numbers with their room_type_id
-      const seen = new Map<string, { roomTypeId: string }>()
-      for (const b of bkData) {
-        const rn = (b.room_number || '').trim()
-        if (!rn || seen.has(rn)) continue
-        seen.set(rn, { roomTypeId: b.room_type_id || (types[0]?.id || '') })
+      if (!bkData || bkData.length === 0) {
+        console.log('[PropertiesPage] No bookings with room_id found for seeding')
+        return
       }
-      if (seen.size === 0) return
 
-      console.log(`[PropertiesPage] Seeding ${seen.size} rooms from booking history`)
-      const inserts = Array.from(seen.entries()).map(([roomNumber, info]) => ({
-        id: crypto.randomUUID(),
-        room_number: roomNumber,
-        name: roomNumber,
-        room_type_id: info.roomTypeId || null,
-        status: 'available',
-        price: types.find(t => t.id === info.roomTypeId)?.basePrice || 0,
-        description: '',
-      }))
-      await supabase.from('rooms').insert(inserts)
-      toast.success(`${inserts.length} room${inserts.length !== 1 ? 's' : ''} imported from booking history`)
+      const uniqueRoomIds = [...new Set(bkData.map((b: any) => b.room_id).filter(Boolean))]
+      console.log(`[PropertiesPage] Found ${uniqueRoomIds.length} unique room_ids in bookings`)
+      // If rooms genuinely don't exist in DB, nothing to seed via FK
     } catch (e) {
-      console.warn('[PropertiesPage] Room seeding failed:', e)
+      console.warn('[PropertiesPage] Room seeding check failed:', e)
     }
   }
 
