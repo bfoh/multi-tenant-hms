@@ -289,14 +289,23 @@ export async function fetchBookingsForStaffWeek(
 ): Promise<StaffWeekResult> {
   const db = _revenueDb
 
-  let allBookings: any = null, allRooms: any = null, allGuests: any = null, allChargesRaw: any = null
+  // Fetch bookings with rooms+room_types embedded in one query (avoids separate roomMap join)
+  let rawBookings: any[] = []
+  let allGuests: any[] = []
+  let allChargesRaw: any[] = []
   try {
-    ;[allBookings, allRooms, allGuests, allChargesRaw] = await Promise.all([
-      db.bookings.list({ limit: 2000 }),
-      db.rooms.list({ limit: 500 }),   // already joins room_types, resolves price
+    const [bResult, gResult, cResult] = await Promise.all([
+      supabase
+        .from('bookings')
+        .select('*, rooms(id, room_number, price, room_type_id, room_types(id, name, base_price))')
+        .limit(2000),
       db.guests.list({ limit: 1000 }),
       db.bookingCharges.list({ limit: 5000 }).catch(() => []),
     ])
+    if (bResult.error) console.warn('[fetchBookingsForStaffWeek] bookings query error:', bResult.error)
+    rawBookings = bResult.data || []
+    allGuests = gResult
+    allChargesRaw = cResult
   } catch (e) {
     console.warn('[fetchBookingsForStaffWeek] DB error:', e)
     return {
@@ -307,8 +316,32 @@ export async function fetchBookingsForStaffWeek(
     }
   }
 
-  // Build lookup maps
-  const roomMap = new Map(((allRooms || []) as any[]).map((r: any) => [r.id, r]))
+  // Normalise each raw booking — embed the joined room data as camelCase fields
+  const allBookings = rawBookings.map((b: any) => {
+    const rm = b.rooms || {}
+    const rt = Array.isArray(rm.room_types) ? rm.room_types[0] : (rm.room_types || {})
+    const resolvedPrice = Number(rt?.base_price || 0) || Number(rm.price || 0)
+    console.log('[revenue-service] booking', b.id, { room_id: b.room_id, rm_id: rm.id, room_number: rm.room_number, base_price: rt?.base_price, room_price: rm.price, resolvedPrice, total_price: b.total_price })
+    return {
+      ...b,
+      checkIn: b.check_in,
+      checkOut: b.check_out,
+      roomId: b.room_id,
+      guestId: b.guest_id,
+      totalPrice: b.total_price || b.amount || 0,
+      discountAmount: b.discount || b.discount_amount || 0,
+      paymentMethod: b.payment_method,
+      specialRequests: b.special_requests,
+      createdBy: b.created_by,
+      userId: b.user_id,
+      createdAt: b.created_at,
+      // Embedded room data
+      _roomNumber: rm.room_number || null,
+      _roomPrice: resolvedPrice,
+      _roomTypeName: rt?.name || '',
+    }
+  })
+
   const guestMap = new Map(((allGuests || []) as any[]).map((g: any) => [g.id, g]))
 
   // Group booking charges by booking ID
@@ -335,10 +368,9 @@ export async function fetchBookingsForStaffWeek(
       return d >= from && d <= to
     })
     .map((b: any) => {
-      const room = roomMap.get(b.roomId) as any
       const guest = guestMap.get(b.guestId) as any
       // Parse guest name from snapshot (authoritative) then fall back to joined guest table
-      const specialReq = b.special_requests || b.specialRequests || ''
+      const specialReq = b.specialRequests || b.special_requests || ''
       const snapshotMatch = (specialReq as string).match(/<!-- GUEST_SNAPSHOT:(.*?) -->/)
       let guestName = guest?.name || 'Guest'
       if (snapshotMatch?.[1]) {
@@ -346,7 +378,6 @@ export async function fetchBookingsForStaffWeek(
       }
       const rawMethod = b.paymentMethod || b.payment_method || b.payment?.method || ''
       const paymentSplits = parsePaymentSplits(b)
-      // If splits exist, derive the primary method from the largest split
       const primaryMethod = paymentSplits
         ? paymentSplits.reduce((a, s) => s.amount > a.amount ? s : a, paymentSplits[0]).method
         : rawMethod
@@ -365,53 +396,37 @@ export async function fetchBookingsForStaffWeek(
       }))
       const additionalChargesTotal = additionalCharges.reduce((s, c) => s + c.amount, 0)
 
-      // rawPrice: stored total_price/amount → room.price (joined from room_types) × nights
+      // Price: use stored total_price first, then fall back to room's resolved price × nights
       const STATIC_RATES: Record<string, number> = {
-        executive: 350, deluxe: 300, standard: 250,
-        economy: 200, vip: 500, double: 350, single: 200,
+        executive: 450, deluxe: 550, standard: 350,
+        economy: 200, vip: 500, family: 700, presidential: 1200, double: 350, single: 200,
       }
-      let rawPrice = Number(b.totalPrice || 0)
+      let rawPrice = Number(b.total_price || 0)
       if (rawPrice === 0) {
         const nights = Math.max(1, Math.round(
-          (new Date(b.checkOut).getTime() - new Date(b.checkIn).getTime()) / 86400000
+          (new Date(b.check_out).getTime() - new Date(b.check_in).getTime()) / 86400000
         ))
-        // room.price is already the joined/resolved best price (base_price || rooms.price)
-        let pricePerNight = Number(room?.price || 0)
-        // STATIC_RATES fallback using room type name from the join
-        if (pricePerNight === 0 && room?.roomTypeName) {
-          const typeName = (room.roomTypeName as string).toLowerCase()
+        // _roomPrice is resolved from the embedded rooms+room_types join
+        let pricePerNight = Number(b._roomPrice || 0)
+        if (pricePerNight === 0 && b._roomTypeName) {
+          const typeName = (b._roomTypeName as string).toLowerCase()
           for (const [key, rate] of Object.entries(STATIC_RATES)) {
             if (typeName.includes(key)) { pricePerNight = rate; break }
           }
         }
         if (pricePerNight > 0) rawPrice = pricePerNight * nights
-        console.log('[revenue-service] price fallback', b.id, { roomId: b.roomId, pricePerNight, nights, rawPrice, roomTypeName: room?.roomTypeName })
       }
-      const discountAmt = Number(b.discountAmount || b.discount_amount || 0)
-      // Use finalAmount (post-discount amount stored at check-in) when available,
-      // otherwise derive from rawPrice - discountAmt.
-      // Note: blink.db converts snake_case columns (final_amount, discount_amount)
-      // to camelCase so b.finalAmount / b.discountAmount are the canonical fields.
-      const storedFinal = b.finalAmount ?? b.final_amount
-      const effectivePrice = (storedFinal != null && storedFinal !== '')
-        ? Math.max(0, Number(storedFinal))
-        : discountAmt > 0
+      const discountAmt = Number(b.discountAmount || b.discount || 0)
+      const effectivePrice = discountAmt > 0
           ? Math.max(0, rawPrice - discountAmt)
           : rawPrice
-
-      if (discountAmt > 0 || (storedFinal != null && storedFinal !== '')) {
-        console.log('[revenue-service] discount booking', b.id, {
-          rawPrice, discountAmt, storedFinal, effectivePrice,
-          finalAmountKey: b.finalAmount, discountKey: b.discountAmount,
-        })
-      }
 
       return {
         id: b.id,
         guestName,
-        roomNumber: room?.roomNumber || '—',
-        checkIn: b.checkIn,
-        checkOut: b.checkOut,
+        roomNumber: b._roomNumber || '—',
+        checkIn: b.check_in,
+        checkOut: b.check_out,
         totalPrice: rawPrice,
         discountAmount: discountAmt,
         effectivePrice,
@@ -431,8 +446,8 @@ export async function fetchBookingsForStaffWeek(
   const matchedIds = new Set(matched.map((b) => b.id))
   // All booking IDs owned by this staff member (any date)
   const allStaffBookingIds = new Set(
-    ((allBookings || []) as any[])
-      .filter((b: any) => (b.createdBy || b.created_by || '') === staffId)
+    (allBookings as any[])
+      .filter((b: any) => (b.created_by || b.user_id || '') === staffId)
       .map((b: any) => b.id)
   )
 
