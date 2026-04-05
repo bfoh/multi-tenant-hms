@@ -151,7 +151,7 @@ export function CheckInDialog({
                     <div className="grid grid-cols-2 gap-4">
                         <div>
                             <p className="text-sm font-medium text-muted-foreground">Guest Name</p>
-                            <p className="text-base font-semibold">{guest.name || booking.guestName || 'Guest'}</p>
+                            <p className="text-base font-semibold">{(booking as any).guestNameSnapshot || guest.name || booking.guestName || 'Guest'}</p>
                         </div>
                         <div>
                             <p className="text-sm font-medium text-muted-foreground">Room Number</p>

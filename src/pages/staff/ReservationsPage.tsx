@@ -955,7 +955,15 @@ export function ReservationsPage() {
         onOpenChange={(open) => !open && setCheckInDialog(null)}
         booking={checkInDialog}
         room={checkInDialog ? roomMap.get(checkInDialog.roomId) : null}
-        guest={checkInDialog ? guestMap.get(checkInDialog.guestId) : null}
+        guest={checkInDialog ? (() => {
+          const snapshotName = (checkInDialog as any).guestNameSnapshot
+          const snapshotEmail = (checkInDialog as any).guestEmailSnapshot
+          const dbGuest = guestMap.get(checkInDialog.guestId)
+          if (snapshotName) {
+            return { ...(dbGuest || { id: checkInDialog.guestId }), name: snapshotName, email: snapshotEmail || dbGuest?.email || '' }
+          }
+          return dbGuest || null
+        })() : null}
         user={user}
         onSuccess={async () => {
           // Optimistic UI update or reload
