@@ -97,16 +97,19 @@ export async function createInvoiceData(booking: BookingWithDetails, roomDetails
 
     // Validate and parse dates safely
     const checkInDate = new Date(booking.checkIn)
-    const checkOutDate = new Date(booking.actualCheckOut || booking.checkOut)
+    const finalCheckOutDate = new Date(booking.actualCheckOut || booking.checkOut)
 
     // Check if dates are valid
-    if (isNaN(checkInDate.getTime()) || isNaN(checkOutDate.getTime())) {
+    if (isNaN(checkInDate.getTime()) || isNaN(finalCheckOutDate.getTime())) {
       throw new Error('Invalid date values in booking data')
     }
 
-    // Normalize to midnight UTC for consistent night calculation
+    // For the room line item, use the ORIGINAL checkOut (not actualCheckOut).
+    // This way the room shows "1 night × GH¢350" not "4 nights × GH¢87.50"
+    // when a stay extension has been added as a separate charge.
+    const originalCheckOutDate = new Date(booking.checkOut)
     const d1 = new Date(Date.UTC(checkInDate.getFullYear(), checkInDate.getMonth(), checkInDate.getDate()))
-    const d2 = new Date(Date.UTC(checkOutDate.getFullYear(), checkOutDate.getMonth(), checkOutDate.getDate()))
+    const d2 = new Date(Date.UTC(originalCheckOutDate.getFullYear(), originalCheckOutDate.getMonth(), originalCheckOutDate.getDate()))
 
     const nights = Math.max(1, Math.ceil((d2.getTime() - d1.getTime()) / (1000 * 60 * 60 * 24)))
 
@@ -1232,9 +1235,11 @@ export async function createGroupInvoiceData(bookings: BookingWithDetails[], bil
       const dbChargesTotal = dbCharges.reduce((sum, c) => sum + (c.amount || 0), 0)
 
       const checkIn = new Date(booking.checkIn)
-      const checkOut = new Date(booking.actualCheckOut || booking.checkOut)
+      // Use original checkOut (not actualCheckOut) so nights matches the booked room price,
+      // not the extended stay — extension nights are separate line items
+      const originalCheckOut = new Date(booking.checkOut)
       const d1 = new Date(Date.UTC(checkIn.getFullYear(), checkIn.getMonth(), checkIn.getDate()))
-      const d2 = new Date(Date.UTC(checkOut.getFullYear(), checkOut.getMonth(), checkOut.getDate()))
+      const d2 = new Date(Date.UTC(originalCheckOut.getFullYear(), originalCheckOut.getMonth(), originalCheckOut.getDate()))
       const nights = Math.max(1, Math.ceil((d2.getTime() - d1.getTime()) / (1000 * 60 * 60 * 24)))
 
       const taxRate = 0.17
