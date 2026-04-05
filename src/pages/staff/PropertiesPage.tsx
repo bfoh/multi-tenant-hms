@@ -6,7 +6,6 @@ import { Label } from '../../components/ui/label'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '../../components/ui/dialog'
 import { Plus, Building2, Bed, Users, DollarSign, MoreVertical, Pencil, Trash2, ShieldAlert } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
-import { bookingEngine } from '@/services/booking-engine'
 import type { RoomType } from '@/types'
 import { toast } from 'sonner'
 import { activityLogService } from '@/services/activity-log-service'
@@ -63,10 +62,10 @@ export function PropertiesPage() {
 
   const loadProperties = async () => {
     try {
-      // Load rooms AND bookings
-      const [roomsResult, allBookings] = await Promise.all([
+      // Load rooms AND bookings — use Supabase directly for both so a blink failure doesn't block rooms
+      const [roomsResult, bookingsResult] = await Promise.all([
         supabase.from('rooms').select('id, room_number, status, room_type_id, price, description').order('room_number'),
-        bookingEngine.getAllBookings()
+        supabase.from('bookings').select('id, status, room_id, check_in, check_out, rooms(room_number)').limit(2000)
       ])
 
       const data = (roomsResult.data || []).map((r: any) => ({
@@ -78,6 +77,14 @@ export function PropertiesPage() {
         basePrice: r.price || 0,
         description: r.description || '',
         maxGuests: 2, bedrooms: 1, bathrooms: 1
+      }))
+
+      // Normalize bookings to a consistent shape for availability check
+      const allBookings = (bookingsResult.data || []).map((b: any) => ({
+        id: b.id,
+        status: b.status,
+        roomNumber: b.rooms?.room_number || '',
+        dates: { checkIn: b.check_in || '', checkOut: b.check_out || '' },
       }))
 
       setBookings(allBookings)
@@ -136,7 +143,7 @@ export function PropertiesPage() {
   const loadRoomTypes = async () => {
     try {
       const { data: typesData } = await supabase.from('room_types').select('id, name, base_price, capacity').order('created_at')
-      const types: RoomType[] = (typesData || []).map((rt: any) => ({ id: rt.id, name: rt.name, basePrice: rt.base_price, capacity: rt.capacity }))
+      const types = (typesData || []).map((rt: any) => ({ id: rt.id, name: rt.name, basePrice: rt.base_price, capacity: rt.capacity })) as RoomType[]
 
       // Ensure default types exist
       const defaults = [
@@ -159,7 +166,7 @@ export function PropertiesPage() {
       if (seeded) {
         toast.info('Initializing missing room types...')
         const { data: allTypesData } = await supabase.from('room_types').select('id, name, base_price, capacity').order('created_at')
-        const allTypes: RoomType[] = (allTypesData || []).map((rt: any) => ({ id: rt.id, name: rt.name, basePrice: rt.base_price, capacity: rt.capacity }))
+        const allTypes = (allTypesData || []).map((rt: any) => ({ id: rt.id, name: rt.name, basePrice: rt.base_price, capacity: rt.capacity })) as RoomType[]
         setRoomTypes(allTypes)
         if (!formData.propertyTypeId && allTypes.length > 0) {
           setFormData((prev) => ({ ...prev, propertyTypeId: allTypes[0].id }))
