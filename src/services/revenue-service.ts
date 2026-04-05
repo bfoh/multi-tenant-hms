@@ -412,18 +412,66 @@ export async function fetchBookingsForStaffWeek(
 
   const matched: BookingSummary[] = ((allBookings || []) as any[])
     .filter((b: any) => {
-      // Only active bookings
+      // Only bookings in a revenue-generating status
       if (!['confirmed', 'checked-in', 'checked-out'].includes(b.status)) return false
-      // Must fall within this week (use check-in date as the week anchor)
-      const checkIn = b.checkIn || b.check_in || ''
-      if (!checkIn) return false
-      const d = new Date(checkIn)
-      if (d < from || d > to) return false
-      // Include if this staff member played ANY revenue role in this booking
-      const creator = b.createdBy || b.created_by || b.userId || b.user_id || ''
-      const checkInBy = b.checkInBy || ''
+
+      const creator  = b.createdBy || b.created_by || b.userId || b.user_id || ''
+      const checkInBy  = b.checkInBy  || ''
       const checkOutBy = b.checkOutBy || ''
-      return creator === staffId || checkInBy === staffId || checkOutBy === staffId
+
+      // Must involve this staff member in at least one role
+      if (creator !== staffId && checkInBy !== staffId && checkOutBy !== staffId) return false
+
+      const { amountPaid: amtAtBooking, paymentStatus, hasPaymentData } = _parseBookingPayment(b)
+
+      // ── Per-stage date anchors ──────────────────────────────────────────
+      // Booking-creation stage: anchor to created_at (revenue collected at reservation)
+      if (creator === staffId) {
+        const createdAt = b.createdAt || b.created_at || ''
+        const dCreated = createdAt ? new Date(createdAt) : null
+
+        if (dCreated && dCreated >= from && dCreated <= to) {
+          // Old bookings with no payment data: include (full price credited to creator)
+          if (!hasPaymentData) return true
+          // Full payment collected at booking time
+          if (paymentStatus === 'full') return true
+          // Partial payment collected at booking time
+          if (amtAtBooking > 0) return true
+          // Pay-later confirmed booking: no revenue yet at booking stage — do NOT include
+          // (it will be picked up for check-in/check-out staff in their respective weeks)
+        }
+      }
+
+      // Check-in stage: anchor to check-in date
+      if (checkInBy === staffId) {
+        const checkIn = b.checkIn || b.check_in || ''
+        if (checkIn) {
+          const d = new Date(checkIn)
+          if (d >= from && d <= to) return true
+        }
+      }
+
+      // Check-out stage: anchor to actual check-out date
+      if (checkOutBy === staffId) {
+        const actualOut = b.actual_check_out || b.actualCheckOut || b.checkOut || b.check_out || ''
+        if (actualOut) {
+          const d = new Date(actualOut)
+          if (d >= from && d <= to) return true
+        }
+      }
+
+      // Backward-compat: old bookings (no check_in_by tracking) that are
+      // checked-in/checked-out and this staff is the creator — use check-in date
+      if (creator === staffId && !checkInBy && !checkOutBy &&
+          (b.status === 'checked-in' || b.status === 'checked-out')) {
+        const checkIn = b.checkIn || b.check_in || ''
+        if (checkIn) {
+          const d = new Date(checkIn)
+          if (d >= from && d <= to) return true
+        }
+      }
+
+      return false
     })
     .map((b: any) => {
       const guest = guestMap.get(b.guestId) as any
@@ -443,54 +491,61 @@ export async function fetchBookingsForStaffWeek(
       const discountAmt = Number(b.discountAmount || b.discount || 0)
       const effectivePrice = discountAmt > 0 ? Math.max(0, rawPrice - discountAmt) : rawPrice
 
-      // ── Revenue attribution ──────────────────────────────────────────────
-      // Revenue is always split by payment stage:
-      //   • booking staff  → amount actually paid at reservation time
-      //   • check-in staff → amount collected at check-in
-      //   • check-out staff → any remaining balance collected at check-out
+      // ── Stage-aware revenue attribution ───────────────────────────────────
+      // Each payment stage is anchored to its own date, so each week only
+      // counts the revenue that was actually collected IN THAT WEEK.
       //
-      // Backward-compat: if PAYMENT_DATA was never stored (truly old booking),
-      // hasPaymentData is false and we credit the full price to the creator.
-      const creator = b.createdBy || b.created_by || b.userId || b.user_id || ''
-      const checkInBy = b.checkInBy || ''
+      // Stage 1 – booking creation: credit to creator, anchored to created_at
+      // Stage 2 – check-in:         credit to checkInBy, anchored to check-in date
+      // Stage 3 – check-out:        credit to checkOutBy, anchored to actual check-out date
+      //
+      // Backward-compat: if no PAYMENT_DATA exists (old booking), credit full
+      // price to creator using check-in date (legacy behaviour unchanged).
+      const creator  = b.createdBy || b.created_by || b.userId || b.user_id || ''
+      const checkInBy  = b.checkInBy  || ''
       const checkOutBy = b.checkOutBy || ''
 
       const { amountPaid: amtAtBooking, paymentStatus, hasPaymentData } = _parseBookingPayment(b)
-      const amtAtCheckIn = Number(b.checkInAmountPaid || 0)
+      const amtAtCheckIn  = Number(b.checkInAmountPaid  || 0)
       const amtAtCheckOut = Number(b.checkOutAmountPaid || 0)
+
+      const createdAtStr  = b.createdAt || b.created_at || ''
+      const checkInStr    = b.checkIn   || b.check_in   || ''
+      const actualOutStr  = b.actual_check_out || b.actualCheckOut || b.checkOut || b.check_out || ''
+
+      const dCreated  = createdAtStr ? new Date(createdAtStr) : null
+      const dCheckIn  = checkInStr   ? new Date(checkInStr)   : null
+      const dActualOut = actualOutStr ? new Date(actualOutStr)  : null
 
       let staffRevenue = 0
 
-      // Whether the booking has already reached a stage where payment was collected
-      // but check_in_by / check_out_by columns don't have data yet (pre-migration).
-      const isAlreadyActive = b.status === 'checked-in' || b.status === 'checked-out'
-      const noCheckInTracking = !checkInBy && !checkOutBy
-
+      // Stage 1: booking-creation payment (creator, anchored to created_at)
       if (creator === staffId) {
+        const inCreationWeek = dCreated && dCreated >= from && dCreated <= to
+        const noCheckInTracking = !checkInBy && !checkOutBy
+        const isAlreadyActive  = b.status === 'checked-in' || b.status === 'checked-out'
+
         if (!hasPaymentData) {
-          // Old booking with no payment tracking at all — full price, backward compat
+          // Old booking — backward-compat: credit full price using check-in date anchor
+          if (noCheckInTracking && dCheckIn && dCheckIn >= from && dCheckIn <= to) {
+            staffRevenue = effectivePrice
+          }
+        } else if (paymentStatus === 'full' && inCreationWeek) {
           staffRevenue = effectivePrice
-        } else if (paymentStatus === 'full') {
-          // Guest paid in full at booking time
-          staffRevenue = effectivePrice
-        } else if (amtAtBooking > 0) {
-          // Part payment at booking — credit only what was actually collected
+        } else if (amtAtBooking > 0 && inCreationWeek) {
           staffRevenue = Math.min(amtAtBooking, effectivePrice)
-        } else if (isAlreadyActive && noCheckInTracking) {
-          // Pay-later booking that was checked in/out before check_in_by tracking existed.
-          // No other staff to attribute to, so credit the booking creator with the full amount.
+        } else if (isAlreadyActive && noCheckInTracking && dCheckIn && dCheckIn >= from && dCheckIn <= to) {
+          // Pay-later checked in before tracking existed — credit full to creator via check-in date
           staffRevenue = effectivePrice
         }
-        // else: pay-later, not yet checked in → 0 credited now;
-        // the remainder will be attributed to check-in/check-out staff when they collect it.
       }
 
-      if (checkInBy === staffId) {
+      // Stage 2: check-in payment (checkInBy, anchored to check-in date)
+      if (checkInBy === staffId && dCheckIn && dCheckIn >= from && dCheckIn <= to) {
         if (amtAtCheckIn > 0) {
           staffRevenue += amtAtCheckIn
         } else {
-          // check_in_by is set but checkInAmountPaid wasn't captured (transition period):
-          // credit check-in staff with whatever remains after any booking payment
+          // checkInAmountPaid not captured (transition period) — credit the remainder
           const alreadyCredited = paymentStatus === 'full'
             ? effectivePrice
             : Math.min(amtAtBooking, effectivePrice)
@@ -498,7 +553,8 @@ export async function fetchBookingsForStaffWeek(
         }
       }
 
-      if (checkOutBy === staffId) {
+      // Stage 3: check-out payment (checkOutBy, anchored to actual check-out date)
+      if (checkOutBy === staffId && dActualOut && dActualOut >= from && dActualOut <= to) {
         staffRevenue += amtAtCheckOut
       }
 
