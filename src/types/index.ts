@@ -60,6 +60,16 @@ export interface Booking {
   discountedBy?: string        // Staff ID who applied discount
   paymentSplits?: PaymentSplit[] // Per-method amounts when guest pays with multiple methods
 
+  // Staff attribution fields
+  checkInBy?: string            // Staff ID who performed check-in
+  checkInByName?: string        // Staff name who performed check-in
+  checkOutBy?: string           // Staff ID who performed check-out
+  checkOutByName?: string       // Staff name who performed check-out
+  checkInAmountPaid?: number    // Amount collected by check-in staff
+  checkOutAmountPaid?: number   // Amount collected by check-out staff
+  createdBy?: string            // Staff ID who created the booking
+  createdByName?: string        // Staff name who created the booking
+
   // Group Booking Fields
   groupId?: string             // Shared ID for all bookings in a group
   groupReference?: string      // Human readable reference (e.g. GRP-2024-ABCD)

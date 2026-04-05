@@ -701,10 +701,31 @@ export function ReservationsPage() {
 
       console.log('[Checkout] Resolved room:', { resolvedRoomId, resolvedRoomNumber, resolvedTenantId })
 
+      // Compute how much remains unpaid (any balance not collected at booking or check-in)
+      const _totalPrice = Number((booking as any).totalPrice || (booking as any).total_price || 0)
+      const _discountAmt = Number((booking as any).discountAmount || (booking as any).discount_amount || (booking as any).discount || 0)
+      const _effectivePrice = Math.max(0, _totalPrice - _discountAmt)
+      // Amount paid at booking time (from PAYMENT_DATA embedded in specialRequests)
+      let _amtAtBooking = 0
+      const _sr = (booking as any).specialRequests || (booking as any).special_requests || ''
+      const _pdMatch = (_sr as string).match?.(/<!-- PAYMENT_DATA:(.*?) -->/)
+      if (_pdMatch?.[1]) { try { _amtAtBooking = JSON.parse(_pdMatch[1]).amountPaid || 0 } catch { /* ignore */ } }
+      const _amtAtCheckIn = Number((booking as any).checkInAmountPaid || (booking as any).check_in_amount_paid || 0)
+      const _checkOutAmountPaid = Math.max(0, _effectivePrice - _amtAtBooking - _amtAtCheckIn)
+      const _staffName = user?.user_metadata?.full_name || user?.user_metadata?.name || user?.email || null
+
       // Update booking status
       await supabase
         .from('bookings')
-        .update({ status: 'checked-out', actual_check_out: new Date().toISOString(), updated_at: new Date().toISOString() })
+        .update({
+          status: 'checked-out',
+          actual_check_out: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          // Staff attribution — who collected remaining payment at check-out
+          check_out_by: user?.id || null,
+          check_out_by_name: _staffName,
+          check_out_amount_paid: _checkOutAmountPaid,
+        })
         .eq('id', booking.id)
 
       // Update room status to cleaning

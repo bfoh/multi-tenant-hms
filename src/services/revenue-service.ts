@@ -321,7 +321,6 @@ export async function fetchBookingsForStaffWeek(
     const rm = b.rooms || {}
     const rt = Array.isArray(rm.room_types) ? rm.room_types[0] : (rm.room_types || {})
     const resolvedPrice = Number(rt?.base_price || 0) || Number(rm.price || 0)
-    console.log('[revenue-service] booking', b.id, { room_id: b.room_id, rm_id: rm.id, room_number: rm.room_number, base_price: rt?.base_price, room_price: rm.price, resolvedPrice, total_price: b.total_price })
     return {
       ...b,
       checkIn: b.check_in,
@@ -335,6 +334,13 @@ export async function fetchBookingsForStaffWeek(
       createdBy: b.created_by,
       userId: b.user_id,
       createdAt: b.created_at,
+      // Staff attribution fields
+      checkInBy: b.check_in_by || null,
+      checkInByName: b.check_in_by_name || null,
+      checkOutBy: b.check_out_by || null,
+      checkOutByName: b.check_out_by_name || null,
+      checkInAmountPaid: Number(b.check_in_amount_paid || 0),
+      checkOutAmountPaid: Number(b.check_out_amount_paid || 0),
       // Embedded room data
       _roomNumber: rm.room_number || null,
       _roomPrice: resolvedPrice,
@@ -356,20 +362,68 @@ export async function fetchBookingsForStaffWeek(
   const from = new Date(weekStart + 'T00:00:00')
   const to = new Date(weekEnd + 'T23:59:59')
 
+  /**
+   * Parse the amount that was paid at booking time from the PAYMENT_DATA
+   * comment embedded in special_requests.
+   */
+  function _parseBookingPayment(b: any): { amountPaid: number; paymentStatus: string } {
+    const sr = b.special_requests || b.specialRequests || ''
+    if (sr) {
+      const m = (sr as string).match(/<!-- PAYMENT_DATA:(.*?) -->/)
+      if (m?.[1]) {
+        try {
+          const pd = JSON.parse(m[1])
+          return { amountPaid: pd.amountPaid || 0, paymentStatus: pd.paymentStatus || 'pending' }
+        } catch { /* ignore */ }
+      }
+    }
+    return {
+      amountPaid: Number(b.amountPaid || b.amount_paid || 0),
+      paymentStatus: b.paymentStatus || b.payment_status || 'pending',
+    }
+  }
+
+  const STATIC_RATES: Record<string, number> = {
+    executive: 450, deluxe: 550, standard: 350,
+    economy: 200, vip: 500, family: 700, presidential: 1200, double: 350, single: 200,
+  }
+
+  /** Resolve full booking room price (before discount). */
+  function _resolveRawPrice(b: any): number {
+    let rawPrice = Number(b.total_price || 0)
+    if (rawPrice === 0) {
+      const nights = Math.max(1, Math.round(
+        (new Date(b.check_out).getTime() - new Date(b.check_in).getTime()) / 86400000
+      ))
+      let pricePerNight = Number(b._roomPrice || 0)
+      if (pricePerNight === 0 && b._roomTypeName) {
+        const typeName = (b._roomTypeName as string).toLowerCase()
+        for (const [key, rate] of Object.entries(STATIC_RATES)) {
+          if (typeName.includes(key)) { pricePerNight = rate; break }
+        }
+      }
+      if (pricePerNight > 0) rawPrice = pricePerNight * nights
+    }
+    return rawPrice
+  }
+
   const matched: BookingSummary[] = ((allBookings || []) as any[])
     .filter((b: any) => {
-      const creator = b.createdBy || b.created_by || b.userId || b.user_id || ''
-      if (creator !== staffId) return false
-
-      if (!['checked-in', 'checked-out'].includes(b.status)) return false
+      // Only active bookings
+      if (!['confirmed', 'checked-in', 'checked-out'].includes(b.status)) return false
+      // Must fall within this week (use check-in date as the week anchor)
       const checkIn = b.checkIn || b.check_in || ''
       if (!checkIn) return false
       const d = new Date(checkIn)
-      return d >= from && d <= to
+      if (d < from || d > to) return false
+      // Include if this staff member played ANY revenue role in this booking
+      const creator = b.createdBy || b.created_by || b.userId || b.user_id || ''
+      const checkInBy = b.checkInBy || ''
+      const checkOutBy = b.checkOutBy || ''
+      return creator === staffId || checkInBy === staffId || checkOutBy === staffId
     })
     .map((b: any) => {
       const guest = guestMap.get(b.guestId) as any
-      // Parse guest name from snapshot (authoritative) then fall back to joined guest table
       const specialReq = b.specialRequests || b.special_requests || ''
       const snapshotMatch = (specialReq as string).match(/<!-- GUEST_SNAPSHOT:(.*?) -->/)
       let guestName = guest?.name || 'Guest'
@@ -382,8 +436,50 @@ export async function fetchBookingsForStaffWeek(
         ? paymentSplits.reduce((a, s) => s.amount > a.amount ? s : a, paymentSplits[0]).method
         : rawMethod
 
-      // Additional charges for this booking
-      const rawCharges = chargesByBookingId.get(b.id) || []
+      const rawPrice = _resolveRawPrice(b)
+      const discountAmt = Number(b.discountAmount || b.discount || 0)
+      const effectivePrice = discountAmt > 0 ? Math.max(0, rawPrice - discountAmt) : rawPrice
+
+      // ── Revenue attribution ──────────────────────────────────────────────
+      // Determine this staff member's share of the booking's room revenue.
+      //
+      // NEW bookings (check_in_by is set): revenue is split by payment stage:
+      //   • booking staff  → amount paid at reservation time
+      //   • check-in staff → amount collected at check-in
+      //   • check-out staff → any remaining balance collected at check-out
+      //
+      // LEGACY bookings (check_in_by not set): full revenue to booking creator.
+      const creator = b.createdBy || b.created_by || b.userId || b.user_id || ''
+      const checkInBy = b.checkInBy || ''
+      const checkOutBy = b.checkOutBy || ''
+      const isNewAttribution = !!checkInBy  // check_in_by being set = new system
+
+      let staffRevenue = 0
+      if (!isNewAttribution) {
+        // Legacy: all room revenue goes to the booking creator
+        if (creator === staffId) staffRevenue = effectivePrice
+      } else {
+        // New staged attribution
+        const { amountPaid: amtAtBooking } = _parseBookingPayment(b)
+        const amtAtCheckIn = Number(b.checkInAmountPaid || 0)
+        const amtAtCheckOut = Number(b.checkOutAmountPaid || 0)
+        // Any untracked balance (edge case: check-in recorded but amount not captured)
+        const tracked = amtAtBooking + amtAtCheckIn + amtAtCheckOut
+        const untracked = Math.max(0, effectivePrice - tracked)
+
+        // Assign untracked remainder to check-in staff (most likely collector)
+        const effectiveCheckIn = amtAtCheckIn + untracked
+
+        if (creator === staffId) staffRevenue += amtAtBooking
+        if (checkInBy === staffId) staffRevenue += effectiveCheckIn
+        if (checkOutBy === staffId) staffRevenue += amtAtCheckOut
+        // Never exceed the full room price
+        staffRevenue = Math.min(staffRevenue, effectivePrice)
+      }
+
+      // Additional charges only shown/attributed for booking creators (charges belong to the booking)
+      const isCreator = creator === staffId
+      const rawCharges = isCreator ? (chargesByBookingId.get(b.id) || []) : []
       const additionalCharges: ChargeLineSummary[] = rawCharges.map((c: any) => ({
         id: c.id,
         description: c.description || '',
@@ -396,31 +492,6 @@ export async function fetchBookingsForStaffWeek(
       }))
       const additionalChargesTotal = additionalCharges.reduce((s, c) => s + c.amount, 0)
 
-      // Price: use stored total_price first, then fall back to room's resolved price × nights
-      const STATIC_RATES: Record<string, number> = {
-        executive: 450, deluxe: 550, standard: 350,
-        economy: 200, vip: 500, family: 700, presidential: 1200, double: 350, single: 200,
-      }
-      let rawPrice = Number(b.total_price || 0)
-      if (rawPrice === 0) {
-        const nights = Math.max(1, Math.round(
-          (new Date(b.check_out).getTime() - new Date(b.check_in).getTime()) / 86400000
-        ))
-        // _roomPrice is resolved from the embedded rooms+room_types join
-        let pricePerNight = Number(b._roomPrice || 0)
-        if (pricePerNight === 0 && b._roomTypeName) {
-          const typeName = (b._roomTypeName as string).toLowerCase()
-          for (const [key, rate] of Object.entries(STATIC_RATES)) {
-            if (typeName.includes(key)) { pricePerNight = rate; break }
-          }
-        }
-        if (pricePerNight > 0) rawPrice = pricePerNight * nights
-      }
-      const discountAmt = Number(b.discountAmount || b.discount || 0)
-      const effectivePrice = discountAmt > 0
-          ? Math.max(0, rawPrice - discountAmt)
-          : rawPrice
-
       return {
         id: b.id,
         guestName,
@@ -429,22 +500,23 @@ export async function fetchBookingsForStaffWeek(
         checkOut: b.check_out,
         totalPrice: rawPrice,
         discountAmount: discountAmt,
-        effectivePrice,
+        effectivePrice: staffRevenue,   // this staff member's attributed room revenue share
         status: b.status,
         createdAt: b.createdAt || b.created_at || '',
         paymentMethod: normalizePaymentMethod(primaryMethod),
         paymentSplits,
         additionalCharges,
         additionalChargesTotal,
-        grandTotal: effectivePrice + additionalChargesTotal,
+        grandTotal: staffRevenue + additionalChargesTotal,
       }
     })
 
   // ── Orphan charges ────────────────────────────────────────────────────────
-  // Charges created THIS WEEK on bookings owned by this staff member whose
+  // Charges created THIS WEEK on bookings CREATED by this staff member whose
   // check-in date falls outside this week (not already covered by `matched`).
+  // Charges are always attributed to the booking creator, not check-in/out staff.
   const matchedIds = new Set(matched.map((b) => b.id))
-  // All booking IDs owned by this staff member (any date)
+  // All booking IDs CREATED by this staff member (any date) — charges belong to creator
   const allStaffBookingIds = new Set(
     (allBookings as any[])
       .filter((b: any) => (b.created_by || b.user_id || '') === staffId)

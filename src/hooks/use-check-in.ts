@@ -49,11 +49,25 @@ export function useCheckIn() {
             const finalAmount = discountAmount && discountAmount > 0 ? Math.max(0, totalPrice - discountAmount) : totalPrice
 
             // 4. Build update payload (all snake_case for Supabase)
+            // Total collected NOW at check-in (sum of all payment splits)
+            const checkInAmountCollected = paymentSplits && paymentSplits.length > 0
+                ? paymentSplits.reduce((sum, s) => sum + (Number(s.amount) || 0), 0)
+                : finalAmount
+
+            const staffName = user?.user_metadata?.full_name
+                || user?.user_metadata?.name
+                || user?.email
+                || null
+
             const updateData: any = {
                 status: 'checked-in',
                 actual_check_in: new Date().toISOString(),
                 payment_method: paymentMethod,
-                updated_at: new Date().toISOString()
+                updated_at: new Date().toISOString(),
+                // Staff attribution — who collected payment at check-in
+                check_in_by: user?.id || null,
+                check_in_by_name: staffName,
+                check_in_amount_paid: checkInAmountCollected,
             }
 
             if (paymentSplits && paymentSplits.length > 1) {

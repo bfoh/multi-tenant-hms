@@ -49,6 +49,15 @@ ALTER TABLE IF EXISTS bookings ADD COLUMN IF NOT EXISTS created_by text;
 ALTER TABLE IF EXISTS bookings ADD COLUMN IF NOT EXISTS created_by_name text;
 ALTER TABLE IF EXISTS bookings ADD COLUMN IF NOT EXISTS total_price decimal(12,2) DEFAULT 0;
 
+-- 4b. Check-in / check-out staff attribution
+ALTER TABLE IF EXISTS bookings ADD COLUMN IF NOT EXISTS check_in_by text;
+ALTER TABLE IF EXISTS bookings ADD COLUMN IF NOT EXISTS check_in_by_name text;
+ALTER TABLE IF EXISTS bookings ADD COLUMN IF NOT EXISTS check_out_by text;
+ALTER TABLE IF EXISTS bookings ADD COLUMN IF NOT EXISTS check_out_by_name text;
+-- Staged payment amounts: how much was collected at each stage
+ALTER TABLE IF EXISTS bookings ADD COLUMN IF NOT EXISTS check_in_amount_paid decimal(12,2) DEFAULT 0;
+ALTER TABLE IF EXISTS bookings ADD COLUMN IF NOT EXISTS check_out_amount_paid decimal(12,2) DEFAULT 0;
+
 -- 5. Disable RLS on these tables so staff can read/write freely
 --    (the app uses Supabase service-role-equivalent anon key with these tables)
 ALTER TABLE standalone_sales DISABLE ROW LEVEL SECURITY;
