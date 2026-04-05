@@ -56,8 +56,22 @@ const _revenueDb = {
   },
   rooms: {
     list: async (opts?: { limit?: number }) => {
-      const { data } = await supabase.from('rooms').select('*').limit(opts?.limit || 500)
-      return (data || []).map((r: any) => ({ ...r, roomNumber: r.room_number, roomTypeId: r.room_type_id }))
+      // Join room_types so we always have base_price available alongside rooms.price
+      const { data } = await supabase
+        .from('rooms')
+        .select('*, room_types(id, name, base_price)')
+        .limit(opts?.limit || 500)
+      return (data || []).map((r: any) => {
+        const rt = Array.isArray(r.room_types) ? r.room_types[0] : (r.room_types || {})
+        const resolvedPrice = Number(rt?.base_price || 0) || Number(r.price || 0)
+        return {
+          ...r,
+          roomNumber: r.room_number,
+          roomTypeId: r.room_type_id,
+          price: resolvedPrice,          // best available price per night
+          roomTypeName: rt?.name || '',
+        }
+      })
     },
   },
   guests: {
@@ -76,12 +90,6 @@ const _revenueDb = {
         paymentMethod: c.payment_method,
         createdAt: c.created_at,
       }))
-    },
-  },
-  roomTypes: {
-    list: async (opts?: { limit?: number }) => {
-      const { data } = await supabase.from('room_types').select('id, name, base_price').limit(opts?.limit || 100)
-      return (data || []).map((rt: any) => ({ id: rt.id, name: rt.name || '', basePrice: rt.base_price || 0 }))
     },
   },
   hr_weekly_revenue: {
@@ -281,14 +289,13 @@ export async function fetchBookingsForStaffWeek(
 ): Promise<StaffWeekResult> {
   const db = _revenueDb
 
-  let allBookings: any = null, allRooms: any = null, allGuests: any = null, allChargesRaw: any = null, allRoomTypes: any = null
+  let allBookings: any = null, allRooms: any = null, allGuests: any = null, allChargesRaw: any = null
   try {
-    ;[allBookings, allRooms, allGuests, allChargesRaw, allRoomTypes] = await Promise.all([
+    ;[allBookings, allRooms, allGuests, allChargesRaw] = await Promise.all([
       db.bookings.list({ limit: 2000 }),
-      db.rooms.list({ limit: 500 }),
+      db.rooms.list({ limit: 500 }),   // already joins room_types, resolves price
       db.guests.list({ limit: 1000 }),
       db.bookingCharges.list({ limit: 5000 }).catch(() => []),
-      db.roomTypes.list({ limit: 100 }).catch(() => []),
     ])
   } catch (e) {
     console.warn('[fetchBookingsForStaffWeek] DB error:', e)
@@ -303,7 +310,6 @@ export async function fetchBookingsForStaffWeek(
   // Build lookup maps
   const roomMap = new Map(((allRooms || []) as any[]).map((r: any) => [r.id, r]))
   const guestMap = new Map(((allGuests || []) as any[]).map((g: any) => [g.id, g]))
-  const roomTypeMap = new Map(((allRoomTypes || []) as any[]).map((rt: any) => [rt.id, rt]))
 
   // Group booking charges by booking ID
   const chargesByBookingId = new Map<string, any[]>()
@@ -359,7 +365,7 @@ export async function fetchBookingsForStaffWeek(
       }))
       const additionalChargesTotal = additionalCharges.reduce((s, c) => s + c.amount, 0)
 
-      // rawPrice: stored total_price/amount → room.price → roomType.base_price → STATIC_RATES × nights
+      // rawPrice: stored total_price/amount → room.price (joined from room_types) × nights
       const STATIC_RATES: Record<string, number> = {
         executive: 350, deluxe: 300, standard: 250,
         economy: 200, vip: 500, double: 350, single: 200,
@@ -369,21 +375,17 @@ export async function fetchBookingsForStaffWeek(
         const nights = Math.max(1, Math.round(
           (new Date(b.checkOut).getTime() - new Date(b.checkIn).getTime()) / 86400000
         ))
-        const rtId = room?.roomTypeId || room?.room_type_id
-        const rtRecord = roomTypeMap.get(rtId) as any
-        // 1. rooms.price per night
+        // room.price is already the joined/resolved best price (base_price || rooms.price)
         let pricePerNight = Number(room?.price || 0)
-        // 2. room_types.base_price
-        if (pricePerNight === 0) pricePerNight = Number(rtRecord?.basePrice || 0)
-        // 3. static lookup by room type name
-        if (pricePerNight === 0 && rtRecord?.name) {
-          const typeName = (rtRecord.name as string).toLowerCase()
+        // STATIC_RATES fallback using room type name from the join
+        if (pricePerNight === 0 && room?.roomTypeName) {
+          const typeName = (room.roomTypeName as string).toLowerCase()
           for (const [key, rate] of Object.entries(STATIC_RATES)) {
             if (typeName.includes(key)) { pricePerNight = rate; break }
           }
         }
         if (pricePerNight > 0) rawPrice = pricePerNight * nights
-        console.log('[revenue-service] price fallback', b.id, { rtId, pricePerNight, nights, rawPrice })
+        console.log('[revenue-service] price fallback', b.id, { roomId: b.roomId, pricePerNight, nights, rawPrice, roomTypeName: room?.roomTypeName })
       }
       const discountAmt = Number(b.discountAmount || b.discount_amount || 0)
       // Use finalAmount (post-discount amount stored at check-in) when available,
