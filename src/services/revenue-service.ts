@@ -80,8 +80,8 @@ const _revenueDb = {
   },
   roomTypes: {
     list: async (opts?: { limit?: number }) => {
-      const { data } = await supabase.from('room_types').select('id, base_price').limit(opts?.limit || 100)
-      return (data || []).map((rt: any) => ({ id: rt.id, basePrice: rt.base_price || 0 }))
+      const { data } = await supabase.from('room_types').select('id, name, base_price').limit(opts?.limit || 100)
+      return (data || []).map((rt: any) => ({ id: rt.id, name: rt.name || '', basePrice: rt.base_price || 0 }))
     },
   },
   hr_weekly_revenue: {
@@ -359,18 +359,31 @@ export async function fetchBookingsForStaffWeek(
       }))
       const additionalChargesTotal = additionalCharges.reduce((s, c) => s + c.amount, 0)
 
-      // rawPrice: stored total_price/amount → fallback to roomType.basePrice × nights
+      // rawPrice: stored total_price/amount → room.price → roomType.base_price → STATIC_RATES × nights
+      const STATIC_RATES: Record<string, number> = {
+        executive: 350, deluxe: 300, standard: 250,
+        economy: 200, vip: 500, double: 350, single: 200,
+      }
       let rawPrice = Number(b.totalPrice || 0)
       if (rawPrice === 0) {
-        const room = roomMap.get(b.roomId) as any
+        const nights = Math.max(1, Math.round(
+          (new Date(b.checkOut).getTime() - new Date(b.checkIn).getTime()) / 86400000
+        ))
         const rtId = room?.roomTypeId || room?.room_type_id
-        const rtPrice = Number(roomTypeMap.get(rtId)?.basePrice || 0)
-        if (rtPrice > 0) {
-          const nights = Math.max(1, Math.round(
-            (new Date(b.checkOut).getTime() - new Date(b.checkIn).getTime()) / 86400000
-          ))
-          rawPrice = rtPrice * nights
+        const rtRecord = roomTypeMap.get(rtId) as any
+        // 1. rooms.price per night
+        let pricePerNight = Number(room?.price || 0)
+        // 2. room_types.base_price
+        if (pricePerNight === 0) pricePerNight = Number(rtRecord?.basePrice || 0)
+        // 3. static lookup by room type name
+        if (pricePerNight === 0 && rtRecord?.name) {
+          const typeName = (rtRecord.name as string).toLowerCase()
+          for (const [key, rate] of Object.entries(STATIC_RATES)) {
+            if (typeName.includes(key)) { pricePerNight = rate; break }
+          }
         }
+        if (pricePerNight > 0) rawPrice = pricePerNight * nights
+        console.log('[revenue-service] price fallback', b.id, { rtId, pricePerNight, nights, rawPrice })
       }
       const discountAmt = Number(b.discountAmount || b.discount_amount || 0)
       // Use finalAmount (post-discount amount stored at check-in) when available,

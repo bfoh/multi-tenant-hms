@@ -289,7 +289,11 @@ export function OnsiteBookingPage() {
       return
     }
 
-    const roomPrice = Number(roomType.basePrice || (roomType as any).base_price) || 0
+    // Price: room_type.base_price → rooms.price → property.displayPrice
+    const roomPrice = Number(roomType.basePrice || (roomType as any).base_price)
+      || Number(roomObj?.price)
+      || Number(availableProperty.displayPrice)
+      || 0
     setCart([...cart, {
       id: Math.random().toString(36).substr(2, 9),
       roomTypeId: roomType.id,
