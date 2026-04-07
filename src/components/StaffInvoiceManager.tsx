@@ -17,7 +17,6 @@ import { toast } from 'sonner'
 import { format } from 'date-fns'
 import { createInvoiceData, downloadInvoicePDF, printInvoice, createPreInvoiceData, downloadPreInvoicePDF, printPreInvoice, PreInvoiceData, createGroupInvoiceData, downloadGroupInvoicePDF } from '@/services/invoice-service'
 import { supabase } from '@/lib/supabase'
-import { supabase } from '@/lib/supabase'
 
 interface InvoiceRecord {
   id: string
