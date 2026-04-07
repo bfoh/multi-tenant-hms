@@ -1885,7 +1885,14 @@ function StaffRevenueRow({
                                   : <span className="text-muted-foreground">—</span>}
                               </TableCell>
                               <TableCell className="text-xs text-right font-semibold text-emerald-700">{formatGHS(b.grandTotal)}</TableCell>
-                              <TableCell className="text-xs"><RevPaymentBadge method={b.paymentMethod} splits={b.paymentSplits} /></TableCell>
+                              <TableCell className="text-xs">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <RevPaymentBadge method={b.paymentMethod} splits={b.paymentSplits} />
+                                  {b.paymentStatus === 'part' && (
+                                    <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200">Deposit</span>
+                                  )}
+                                </div>
+                              </TableCell>
                             </TableRow>
                           ))}
                         </TableBody>

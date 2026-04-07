@@ -123,7 +123,14 @@ function BookingRow({ b }: { b: BookingSummary }) {
             : <span className="text-xs text-muted-foreground">—</span>}
         </TableCell>
         <TableCell className="text-right font-semibold text-emerald-700">{formatGHS(b.grandTotal)}</TableCell>
-        <TableCell><PaymentMethodBadge method={b.paymentMethod} splits={b.paymentSplits} /></TableCell>
+        <TableCell>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <PaymentMethodBadge method={b.paymentMethod} splits={b.paymentSplits} />
+            {b.paymentStatus === 'part' && (
+              <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200">Deposit</span>
+            )}
+          </div>
+        </TableCell>
         <TableCell>
           <Badge variant="outline" className="text-xs capitalize">{b.status}</Badge>
         </TableCell>

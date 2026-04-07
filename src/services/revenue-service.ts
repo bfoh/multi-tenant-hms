@@ -190,6 +190,7 @@ export interface BookingSummary {
   status: string
   createdAt: string
   paymentMethod: string   // 'cash' | 'mobile_money' | 'card' | 'not_paid'
+  paymentStatus: string   // 'full' | 'part' | 'pending'
   paymentSplits?: Array<{ method: string; amount: number }>
   additionalChargesTotal: number
   additionalCharges: ChargeLineSummary[]
@@ -646,6 +647,7 @@ export async function fetchBookingsForStaffWeek(
         status: b.status,
         createdAt: b.createdAt || b.created_at || '',
         paymentMethod: normalizePaymentMethod(primaryMethod),
+        paymentStatus,
         paymentSplits,
         additionalCharges,
         additionalChargesTotal,
