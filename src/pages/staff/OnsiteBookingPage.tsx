@@ -91,7 +91,7 @@ export function OnsiteBookingPage() {
     try {
       const [typesResult, roomsResult, bookingsData] = await Promise.all([
         supabase.from('room_types').select('id, name, base_price, capacity'),
-        supabase.from('rooms').select('id, room_number, status, room_type_id, price').eq('status', 'available'),
+        supabase.from('rooms').select('id, room_number, status, room_type_id, price'),
         bookingEngine.getAllBookings()
       ])
       const typesData: RoomType[] = (typesResult.data || []).map((rt: any) => ({ id: rt.id, name: rt.name, basePrice: rt.base_price, capacity: rt.capacity }))
@@ -251,19 +251,21 @@ export function OnsiteBookingPage() {
       // 1. Check maintenance
       if (property.status === 'maintenance') return false
 
-      // 2. Check bookings
+      // 2. Check bookings — handle both direct fields and blink-format (dates.checkIn)
       const hasOverlappingBooking = bookings.some(booking => {
         if (booking.status === 'cancelled') return false
         if (booking.roomNumber !== property.roomNumber) return false
         if (!['reserved', 'confirmed', 'checked-in'].includes(booking.status)) return false
-        return isOverlap(checkIn, checkOut, booking.checkIn, booking.checkOut)
+        const bIn = booking.checkIn || booking.dates?.checkIn
+        const bOut = booking.checkOut || booking.dates?.checkOut
+        return isOverlap(checkIn, checkOut, bIn, bOut)
       })
       if (hasOverlappingBooking) return false
 
-      // 3. Check cart
+      // 3. Check cart — pass Date objects directly to avoid toISOString timezone shift
       const isInCart = cart.some(item =>
         item.roomNumber === property.roomNumber &&
-        isOverlap(checkIn, checkOut, item.checkIn.toISOString(), item.checkOut.toISOString())
+        isOverlap(checkIn, checkOut, item.checkIn, item.checkOut)
       )
       if (isInCart) return false
 
