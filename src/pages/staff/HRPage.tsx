@@ -1875,9 +1875,9 @@ function StaffRevenueRow({
                                 {b.discountAmount > 0
                                   ? <span className="flex flex-col items-end gap-0.5">
                                       <span className="line-through text-[10px] text-muted-foreground">{formatGHS(b.totalPrice)}</span>
-                                      <span>{formatGHS(b.effectivePrice)}</span>
+                                      <span>{formatGHS(b.roomRate)}</span>
                                     </span>
-                                  : formatGHS(b.effectivePrice)}
+                                  : formatGHS(b.roomRate)}
                               </TableCell>
                               <TableCell className="text-xs text-right">
                                 {b.additionalChargesTotal > 0

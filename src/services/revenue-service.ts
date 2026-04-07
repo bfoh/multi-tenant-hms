@@ -186,7 +186,8 @@ export interface BookingSummary {
   checkOut: string
   totalPrice: number       // Original room price before any discount
   discountAmount: number   // Discount applied at check-in (0 if none)
-  effectivePrice: number   // totalPrice - discountAmount (actual room revenue)
+  roomRate: number         // Actual room rate (totalPrice - discount), always the real price
+  effectivePrice: number   // This staff member's attributed revenue share for the week
   status: string
   createdAt: string
   paymentMethod: string   // 'cash' | 'mobile_money' | 'card' | 'not_paid'
@@ -643,7 +644,8 @@ export async function fetchBookingsForStaffWeek(
         checkOut: b.check_out,
         totalPrice: rawPrice,
         discountAmount: discountAmt,
-        effectivePrice: staffRevenue,   // this staff member's attributed room revenue share
+        roomRate: discountAmt > 0 ? Math.max(0, rawPrice - discountAmt) : rawPrice,
+        effectivePrice: staffRevenue,   // this staff member's attributed revenue share
         status: b.status,
         createdAt: b.createdAt || b.created_at || '',
         paymentMethod: normalizePaymentMethod(primaryMethod),
