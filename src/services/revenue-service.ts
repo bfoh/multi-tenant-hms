@@ -564,7 +564,11 @@ export async function fetchBookingsForStaffWeek(
         } else if (paymentStatus === 'full' && inCreationWeek) {
           staffRevenue = effectivePrice
         } else if (amtAtBooking > 0 && inCreationWeek) {
-          staffRevenue = Math.min(amtAtBooking, effectivePrice)
+          // For primary group bookings, the deposit covers all rooms in the group —
+          // do NOT cap at one room's effectivePrice. Use the full deposit amount.
+          // For solo bookings, cap at the room price (can't collect more than the room costs).
+          const isPrimaryGroup = !!(grpId && grpIsPrimary)
+          staffRevenue = isPrimaryGroup ? amtAtBooking : Math.min(amtAtBooking, effectivePrice)
         } else if (isAlreadyActive && noCheckInTracking && dCheckIn && dCheckIn >= from && dCheckIn <= to) {
           // Pay-later checked in before tracking existed — credit full to creator via check-in date
           staffRevenue = effectivePrice
