@@ -363,6 +363,29 @@ export async function fetchBookingsForStaffWeek(
   const to = new Date(weekEnd + 'T23:59:59')
 
   /**
+   * Parse group booking metadata from the GROUP_DATA comment in special_requests.
+   *
+   * For group bookings, the deposit is stored on the PRIMARY booking only.
+   * Non-primary members must not be credited independently — doing so would
+   * double-count the deposit across all rooms.
+   */
+  function _parseGroupInfo(b: any): { groupId: string | null; isPrimary: boolean; groupTotalPrice: number } {
+    const sr = b.special_requests || b.specialRequests || ''
+    const m = (sr as string).match(/<!-- GROUP_DATA:(.*?) -->/)
+    if (m?.[1]) {
+      try {
+        const gd = JSON.parse(m[1])
+        return {
+          groupId: gd.groupId || null,
+          isPrimary: gd.isPrimaryBooking === true,
+          groupTotalPrice: Number(gd.groupTotalPrice || 0),
+        }
+      } catch { /* ignore */ }
+    }
+    return { groupId: null, isPrimary: true, groupTotalPrice: 0 }
+  }
+
+  /**
    * Parse the amount that was paid at booking time from the PAYMENT_DATA
    * comment embedded in special_requests.
    *
@@ -422,7 +445,12 @@ export async function fetchBookingsForStaffWeek(
       // Must involve this staff member in at least one role
       if (creator !== staffId && checkInBy !== staffId && checkOutBy !== staffId) return false
 
-      const { amountPaid: amtAtBooking, paymentStatus, hasPaymentData } = _parseBookingPayment(b)
+      const { amountPaid: rawAmtAtBooking, paymentStatus, hasPaymentData } = _parseBookingPayment(b)
+      const { groupId, isPrimary } = _parseGroupInfo(b)
+
+      // For non-primary group members the deposit was collected at the primary booking.
+      // Zero it out here so we never double-count across rooms in the same group.
+      const amtAtBooking = (groupId && !isPrimary) ? 0 : rawAmtAtBooking
 
       // ── Per-stage date anchors ──────────────────────────────────────────
       // Booking-creation stage: anchor to created_at (revenue collected at reservation)
@@ -435,7 +463,7 @@ export async function fetchBookingsForStaffWeek(
           if (!hasPaymentData) return true
           // Full payment collected at booking time
           if (paymentStatus === 'full') return true
-          // Partial payment collected at booking time
+          // Partial payment collected at booking time (only primary group member or solo booking)
           if (amtAtBooking > 0) return true
           // Pay-later confirmed booking: no revenue yet at booking stage — do NOT include
           // (it will be picked up for check-in/check-out staff in their respective weeks)
@@ -505,7 +533,10 @@ export async function fetchBookingsForStaffWeek(
       const checkInBy  = b.checkInBy  || ''
       const checkOutBy = b.checkOutBy || ''
 
-      const { amountPaid: amtAtBooking, paymentStatus, hasPaymentData } = _parseBookingPayment(b)
+      const { amountPaid: rawAmtAtBookingMap, paymentStatus, hasPaymentData } = _parseBookingPayment(b)
+      const { groupId: grpId, isPrimary: grpIsPrimary, groupTotalPrice } = _parseGroupInfo(b)
+      // Non-primary group members: deposit was on primary booking — don't credit here
+      const amtAtBooking = (grpId && !grpIsPrimary) ? 0 : rawAmtAtBookingMap
       const amtAtCheckIn  = Number(b.checkInAmountPaid  || 0)
       const amtAtCheckOut = Number(b.checkOutAmountPaid || 0)
 
@@ -558,8 +589,16 @@ export async function fetchBookingsForStaffWeek(
         staffRevenue += amtAtCheckOut
       }
 
-      // Never exceed the full room price
-      staffRevenue = Math.min(staffRevenue, effectivePrice)
+      // Cap revenue.
+      // For a primary group booking the deposit can exceed this room's individual price
+      // (it covers all rooms in the group). Use groupTotalPrice as the cap when available,
+      // otherwise cap at the actual amount paid so we never invent revenue.
+      const revenueCap = (grpId && grpIsPrimary && groupTotalPrice > 0)
+        ? groupTotalPrice
+        : (grpId && grpIsPrimary && amtAtBooking > effectivePrice)
+          ? amtAtBooking   // existing booking: deposit stored > one room price — trust it
+          : effectivePrice
+      staffRevenue = Math.min(staffRevenue, revenueCap)
 
       // Additional charges attribution:
       // • Booking creator sees ALL charges on their booking.

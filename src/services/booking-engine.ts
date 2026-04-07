@@ -457,7 +457,9 @@ class BookingEngine {
       billingContact: (bookingData as any).billingContact,
       additionalCharges: (bookingData as any).additionalCharges,
       discount: (bookingData as any).discount,
-      subtotal: (bookingData as any).subtotal
+      subtotal: (bookingData as any).subtotal,
+      // Total price of ALL rooms in the group — used by revenue-service to cap deposit credit correctly
+      groupTotalPrice: (bookingData as any).groupTotalPrice,
     }
 
     // Determine if we need to attach metadata

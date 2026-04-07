@@ -346,11 +346,21 @@ export function OnsiteBookingPage() {
         ? paymentSplits.filter(s => s.amount > 0).map(s => ({ method: s.method, amount: s.amount }))
         : undefined
 
-      // Build a booking data object for a single cart item
+      // Build a booking data object for a single cart item.
+      // For GROUP bookings: only the PRIMARY (index=0) carries the deposit amount and
+      // groupTotalPrice so revenue-service never double-counts across rooms.
+      // Secondary rooms are recorded as pay-later — they'll be settled at check-in/out.
+      const isGroupBooking = cart.length > 1
       const buildBookingItem = (item: typeof cart[0], index: number) => {
         const itemNights = differenceInDays(item.checkOut, item.checkIn)
         const itemTotal = Number(item.price) * itemNights
         const assigned = guestAssignments[item.id] || { name: guestInfo.name, email: guestInfo.email }
+        const isPrimary = index === 0
+        // Deposit only belongs to the primary booking; secondary rooms are pay-later
+        const itemAmountPaid = (isGroupBooking && !isPrimary)
+          ? 0
+          : (paymentType === 'full' ? grandTotal : (paymentType === 'part' ? splitsPaidTotal : 0))
+        const itemPaymentStatus = (isGroupBooking && !isPrimary) ? 'pending' : paymentType
         return {
           guest: {
             fullName: assigned.name,
@@ -370,18 +380,20 @@ export function OnsiteBookingPage() {
           source: 'reception' as const,
           payment: {
             method: primaryPaymentMethod,
-            status: (paymentType === 'full' ? 'completed' : 'pending') as 'pending' | 'completed' | 'failed',
-            amount: paymentType === 'full' ? itemTotal : (paymentType === 'part' ? splitsPaidTotal : 0),
+            status: (itemPaymentStatus === 'full' ? 'completed' : 'pending') as 'pending' | 'completed' | 'failed',
+            amount: itemAmountPaid,
             reference: `PAY-${Date.now()}-${index}`,
-            paidAt: paymentType !== 'pending' ? new Date().toISOString() : undefined
+            paidAt: itemPaymentStatus !== 'pending' ? new Date().toISOString() : undefined
           },
           paymentMethod: primaryPaymentMethod,
-          paymentSplits: paymentSplitsData,
-          amountPaid: paymentType === 'full' ? grandTotal : (paymentType === 'part' ? splitsPaidTotal : 0),
-          paymentStatus: paymentType,
+          paymentSplits: isPrimary ? paymentSplitsData : undefined,
+          amountPaid: itemAmountPaid,
+          paymentStatus: itemPaymentStatus,
           createdBy: user?.id,
           createdByName: user?.user_metadata?.full_name || user?.email,
-          ...(index === 0 ? { subtotal: totalPrice } : {})
+          // Primary booking carries the group total price so revenue-service can cap correctly
+          ...(isPrimary && isGroupBooking ? { groupTotalPrice: grandTotal } : {}),
+          ...(isPrimary ? { subtotal: totalPrice } : {})
         }
       }
 
