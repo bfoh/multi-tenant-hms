@@ -52,6 +52,7 @@ interface BookingWithDetails {
   status: string
   source?: string
   totalPrice: number
+  roomRate: number
   numGuests: number
   nights: number
   paymentMethod?: string
@@ -227,27 +228,27 @@ export function BookingsPage() {
 
         // Price recovery safety net - if persisted price is 0, recalculate from room data
         let totalPrice = Number(b.totalPrice || (b as any).amount || b.total_price || 0)
+        const room = enrichedRooms.find(r => r.roomNumber === b.roomNumber)
+        let roomRate = room?._resolvedPrice || 0
+
         if (totalPrice === 0 && nights > 0) {
-          const room = enrichedRooms.find(r => r.roomNumber === b.roomNumber)
-          let pricePerNight = room?._resolvedPrice || 0
-          
           // HARD FALLBACK: If join failed, try static lookup based on room name/type
-          if (pricePerNight === 0) {
+          if (roomRate === 0) {
             const typeStr = (roomTypeName || (b as any).roomType || '').toLowerCase()
             Object.entries(STATIC_RATES).forEach(([key, rate]) => {
-              if (typeStr.includes(key)) pricePerNight = rate
+              if (typeStr.includes(key)) roomRate = rate
             })
           }
 
           // UNIVERSAL FALLBACK: If still 0, use standard rate (350)
-          if (pricePerNight === 0) {
-            pricePerNight = 350
+          if (roomRate === 0) {
+            roomRate = 350
             console.warn(`[BookingsPage] UNIVERSAL FALLBACK triggered for booking: ${b.id || (b as any)._id}`)
           }
 
-          if (pricePerNight > 0) {
-            totalPrice = nights * pricePerNight
-            console.log(`[BookingsPage] DEEP RECOVERY: ${b.guest?.fullName} => ${nights} nights * ${pricePerNight} = ${totalPrice}`)
+          if (roomRate > 0) {
+            totalPrice = nights * roomRate
+            console.log(`[BookingsPage] DEEP RECOVERY: ${b.guest?.fullName} => ${nights} nights * ${roomRate} = ${totalPrice}`)
           }
         }
 
@@ -264,6 +265,7 @@ export function BookingsPage() {
           status: b.status,
           source: b.source,
           totalPrice,
+          roomRate,
           numGuests: b.numGuests,
           nights,
           paymentMethod: b.payment_method || b.paymentMethod || 'Not paid',
@@ -1021,7 +1023,7 @@ export function BookingsPage() {
                         {formatCurrencySync(Number(booking.totalPrice), currency)}
                       </p>
                       <p className="text-xs text-muted-foreground">
-                        {formatCurrencySync(Number(booking.totalPrice) / booking.nights, currency)} per night
+                        {formatCurrencySync(booking.roomRate || Number(booking.totalPrice) / booking.nights, currency)} per night
                       </p>
                       <p className="text-xs text-muted-foreground capitalize mt-1">
                         {booking.paymentMethod?.replace('_', ' ') || 'Not paid'}
