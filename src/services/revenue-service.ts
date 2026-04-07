@@ -440,68 +440,41 @@ export async function fetchBookingsForStaffWeek(
       // Only bookings in a revenue-generating status
       if (!['confirmed', 'checked-in', 'checked-out'].includes(b.status)) return false
 
-      const creator  = b.createdBy || b.created_by || b.userId || b.user_id || ''
+      const creator    = b.createdBy || b.created_by || b.userId || b.user_id || ''
       const checkInBy  = b.checkInBy  || ''
       const checkOutBy = b.checkOutBy || ''
 
       // Must involve this staff member in at least one role
       if (creator !== staffId && checkInBy !== staffId && checkOutBy !== staffId) return false
 
+      // ── Single-week anchor ─────────────────────────────────────────────────
+      // Each booking belongs to EXACTLY ONE week — determined by its primary date:
+      //   • Active/completed bookings (checked-in, checked-out): check-in date
+      //   • Confirmed (not yet checked in): booking creation date
+      //
+      // This prevents bookings from bleeding across week boundaries (e.g. a guest
+      // who checked in on Apr 5 and checks out Apr 9 stays in the Apr 0-5 week,
+      // not the Apr 6-12 week, even though check-out is this week).
+      const isActiveBooking = b.status === 'checked-in' || b.status === 'checked-out'
+      const checkInStr  = b.checkIn || b.check_in || ''
+      const createdAtStr = b.createdAt || b.created_at || ''
+      const anchorStr = isActiveBooking ? checkInStr : createdAtStr
+      if (!anchorStr) return false
+      const anchorDate = new Date(anchorStr)
+      if (anchorDate < from || anchorDate > to) return false
+
+      // Booking is anchored to this week — now check if there is actual revenue
       const { amountPaid: rawAmtAtBooking, paymentStatus, hasPaymentData } = _parseBookingPayment(b)
       const { groupId, isPrimary } = _parseGroupInfo(b)
-
-      // For non-primary group members the deposit was collected at the primary booking.
-      // Zero it out here so we never double-count across rooms in the same group.
       const amtAtBooking = (groupId && !isPrimary) ? 0 : rawAmtAtBooking
 
-      // ── Per-stage date anchors ──────────────────────────────────────────
-      // Booking-creation stage: anchor to created_at (revenue collected at reservation)
-      if (creator === staffId) {
-        const createdAt = b.createdAt || b.created_at || ''
-        const dCreated = createdAt ? new Date(createdAt) : null
-
-        if (dCreated && dCreated >= from && dCreated <= to) {
-          // Old bookings with no payment data: include (full price credited to creator)
-          if (!hasPaymentData) return true
-          // Full payment collected at booking time
-          if (paymentStatus === 'full') return true
-          // Partial payment collected at booking time (only primary group member or solo booking)
-          if (amtAtBooking > 0) return true
-          // Pay-later confirmed booking: no revenue yet at booking stage — do NOT include
-          // (it will be picked up for check-in/check-out staff in their respective weeks)
-        }
+      // For confirmed pay-later bookings with no payment collected, skip —
+      // there is no revenue to record yet.
+      if (b.status === 'confirmed' && hasPaymentData && paymentStatus === 'pending' && amtAtBooking === 0) {
+        return false
       }
 
-      // Check-in stage: anchor to check-in date
-      if (checkInBy === staffId) {
-        const checkIn = b.checkIn || b.check_in || ''
-        if (checkIn) {
-          const d = new Date(checkIn)
-          if (d >= from && d <= to) return true
-        }
-      }
-
-      // Check-out stage: anchor to actual check-out date
-      if (checkOutBy === staffId) {
-        const actualOut = b.actual_check_out || b.actualCheckOut || b.checkOut || b.check_out || ''
-        if (actualOut) {
-          const d = new Date(actualOut)
-          if (d >= from && d <= to) return true
-        }
-      }
-
-      // Backward-compat: old bookings (no check_in_by tracking) that are
-      // checked-in/checked-out and this staff is the creator — use check-in date
-      if (creator === staffId && !checkInBy && !checkOutBy &&
-          (b.status === 'checked-in' || b.status === 'checked-out')) {
-        const checkIn = b.checkIn || b.check_in || ''
-        if (checkIn) {
-          const d = new Date(checkIn)
-          if (d >= from && d <= to) return true
-        }
-      }
-
-      return false
+      return true
     })
     .map((b: any) => {
       const guest = guestMap.get(b.guestId) as any
