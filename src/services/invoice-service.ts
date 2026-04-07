@@ -40,6 +40,8 @@ interface InvoiceData {
     vat: number             // VAT (15%)
     tourismLevy: number     // Tourism Levy (1%)
     total: number           // Grand total
+    depositPaid?: number    // Amount paid at booking time (partial payment / deposit)
+    balanceDue?: number     // Remaining balance after deposit
   }
   hotel: {
     name: string
@@ -117,6 +119,22 @@ export async function createInvoiceData(booking: BookingWithDetails, roomDetails
     if (nights < 0) {
       throw new Error('Check-out date cannot be before check-in date')
     }
+
+    // Extract deposit (partial payment at booking time) from PAYMENT_DATA
+    let depositPaid = booking.amountPaid || 0
+    let depositPaymentStatus = booking.paymentStatus || 'pending'
+    if (!depositPaid && booking.specialRequests) {
+      const pm = booking.specialRequests.match(/<!-- PAYMENT_DATA:(.*?) -->/)
+      if (pm?.[1]) {
+        try {
+          const pd = JSON.parse(pm[1])
+          depositPaid = pd.amountPaid || 0
+          depositPaymentStatus = pd.paymentStatus || 'pending'
+        } catch { /* ignore */ }
+      }
+    }
+    // Only treat as deposit if it's a partial payment, not full
+    if (depositPaymentStatus === 'full') depositPaid = 0
 
     // Parse specialRequests for discount data
     let discount: { type: 'percentage' | 'fixed', value: number, amount: number } | undefined
@@ -205,7 +223,11 @@ export async function createInvoiceData(booking: BookingWithDetails, roomDetails
         taxSubTotal: taxBreakdown.subTotal,
         vat: taxBreakdown.vat,
         tourismLevy: taxBreakdown.tourismLevy,
-        total: grandTotal
+        total: grandTotal,
+        ...(depositPaid > 0 ? {
+          depositPaid,
+          balanceDue: Math.max(0, grandTotal - depositPaid)
+        } : {})
       },
       hotel: {
         name: hotelSettings.name,
@@ -359,6 +381,10 @@ table.tt .disc td{color:#dc2626}
     <tr><td>VAT (15%)</td><td class="r">${formatCurrencySync(invoiceData.charges.vat, currency)}</td></tr>
     <tr><td>Tourism Levy (1%)</td><td class="r">${formatCurrencySync(invoiceData.charges.tourismLevy, currency)}</td></tr>
     <tr class="gtot"><td>Grand Total</td><td class="r">${formatCurrencySync(invoiceData.charges.total, currency)}</td></tr>
+    ${invoiceData.charges.depositPaid ? `
+    <tr style="color:#16a34a"><td>&#10003; Deposit Paid</td><td class="r">&#x2212;&nbsp;${formatCurrencySync(invoiceData.charges.depositPaid, currency)}</td></tr>
+    <tr style="font-weight:800;font-size:12px;border-top:2px solid #1a1a1a"><td>Balance Due</td><td class="r">${formatCurrencySync(invoiceData.charges.balanceDue ?? 0, currency)}</td></tr>
+    ` : ''}
   </table>
 </div>
 <div class="footer">
@@ -787,7 +813,7 @@ export async function generatePreInvoiceHTML(preInvoiceData: PreInvoiceData): Pr
     const paymentContent = preInvoiceData.paymentStatus === 'full'
       ? `<p><strong style="color:#16a34a">&#10003; Fully paid.</strong> Thank you for your payment of <strong>${formatCurrencySync(preInvoiceData.charges.total, currency)}</strong>.</p>`
       : preInvoiceData.paymentStatus === 'part'
-        ? `<p>Paid: <strong style="color:#16a34a">${formatCurrencySync(preInvoiceData.amountPaid || 0, currency)}</strong></p><p style="margin-top:3px">Balance: <strong style="color:#c9542a">${formatCurrencySync(remaining, currency)}</strong> due at check-in.</p><p style="margin-top:5px;color:#bbb;font-size:9px">Cash &middot; Mobile Money &middot; Bank Transfer</p>`
+        ? `<p>&#10003; Deposit Paid: <strong style="color:#16a34a">${formatCurrencySync(preInvoiceData.amountPaid || 0, currency)}</strong></p><p style="margin-top:3px">Balance Due: <strong style="color:#c9542a">${formatCurrencySync(remaining, currency)}</strong> — payable at check-in.</p><p style="margin-top:5px;color:#bbb;font-size:9px">Cash &middot; Mobile Money &middot; Bank Transfer</p>`
         : `<p>Full amount of <strong>${formatCurrencySync(preInvoiceData.charges.total, currency)}</strong> due at check-in.</p><p style="margin-top:5px;color:#bbb;font-size:9px">Cash &middot; Mobile Money &middot; Bank Transfer</p>`
 
     const discountRow = preInvoiceData.charges.discountTotal > 0
@@ -921,6 +947,10 @@ table.tt .disc td{color:#dc2626}
     <tr><td>VAT (15%)</td><td class="r">${formatCurrencySync(preInvoiceData.charges.vat, currency)}</td></tr>
     <tr><td>Tourism Levy (1%)</td><td class="r">${formatCurrencySync(preInvoiceData.charges.tourismLevy, currency)}</td></tr>
     <tr class="gtot"><td>Grand Total</td><td class="r">${formatCurrencySync(preInvoiceData.charges.total, currency)}</td></tr>
+    ${preInvoiceData.paymentStatus === 'part' && preInvoiceData.amountPaid ? `
+    <tr style="color:#16a34a"><td>&#10003; Deposit Paid</td><td class="r">&#x2212;&nbsp;${formatCurrencySync(preInvoiceData.amountPaid, currency)}</td></tr>
+    <tr style="font-weight:800;font-size:12px;border-top:2px solid #1a1a1a"><td>Balance Due</td><td class="r">${formatCurrencySync(Math.max(0, preInvoiceData.charges.total - preInvoiceData.amountPaid), currency)}</td></tr>
+    ` : ''}
   </table>
 </div>
 <div class="footer">
@@ -1150,6 +1180,8 @@ export interface GroupInvoiceData {
     vat: number             // VAT (15%)
     tourismLevy: number     // Tourism Levy (1%)
     total: number           // Grand total (unchanged)
+    depositPaid?: number    // Deposit collected at booking time
+    balanceDue?: number     // Remaining balance after deposit
   }
   hotel: {
     name: string
@@ -1195,6 +1227,7 @@ export async function createGroupInvoiceData(bookings: BookingWithDetails[], bil
 
     let groupAdditionalCharges: { description: string, amount: number }[] = []
     let groupDiscount: { type: 'percentage' | 'fixed', value: number, amount: number } | undefined = undefined
+    let groupDepositPaid = 0
 
     // Access special requests with fallback for snake_case (from Supabase)
     const specialReqContent = (primaryBooking as any).specialRequests || (primaryBooking as any).special_requests
@@ -1212,6 +1245,20 @@ export async function createGroupInvoiceData(bookings: BookingWithDetails[], bil
           console.warn('Failed to parse group data for invoice', e)
         }
       }
+      // Extract deposit from PAYMENT_DATA on primary booking
+      const pm = specialReqContent.match(/<!-- PAYMENT_DATA:(.*?) -->/)
+      if (pm?.[1]) {
+        try {
+          const pd = JSON.parse(pm[1])
+          if (pd.paymentStatus === 'part' && pd.amountPaid > 0) {
+            groupDepositPaid = pd.amountPaid
+          }
+        } catch { /* ignore */ }
+      }
+    }
+    // Also check direct columns on primary booking (belt-and-suspenders)
+    if (!groupDepositPaid && (primaryBooking as any).paymentStatus === 'part') {
+      groupDepositPaid = (primaryBooking as any).amountPaid || 0
     }
 
     const groupChargesTotal = groupAdditionalCharges.reduce((sum, c) => sum + (c.amount || 0), 0)
@@ -1310,7 +1357,11 @@ export async function createGroupInvoiceData(bookings: BookingWithDetails[], bil
         taxSubTotal: taxBreakdown.subTotal,
         vat: taxBreakdown.vat,
         tourismLevy: taxBreakdown.tourismLevy,
-        total: grandTotal
+        total: grandTotal,
+        ...(groupDepositPaid > 0 ? {
+          depositPaid: groupDepositPaid,
+          balanceDue: Math.max(0, grandTotal - groupDepositPaid)
+        } : {})
       },
       hotel: {
         name: hotelSettings.name,
@@ -1477,6 +1528,16 @@ export async function generateGroupInvoiceHTML(data: GroupInvoiceData): Promise<
             <td>Grand Total</td>
             <td class="text-right">${formatCurrencySync(data.summary.total, currency)}</td>
           </tr>
+          ${data.summary.depositPaid ? `
+          <tr style="color:#16a34a;font-size:10px;">
+            <td>&#10003; Deposit Paid</td>
+            <td class="text-right">&#x2212;&nbsp;${formatCurrencySync(data.summary.depositPaid, currency)}</td>
+          </tr>
+          <tr style="font-weight:800;font-size:12px;background:#fff3cd;">
+            <td>Balance Due</td>
+            <td class="text-right">${formatCurrencySync(data.summary.balanceDue ?? 0, currency)}</td>
+          </tr>
+          ` : ''}
         </table>
       </div>
 
