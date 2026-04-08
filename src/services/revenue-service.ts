@@ -830,12 +830,35 @@ export async function getAllStaffReportsForWeek(weekStart: string): Promise<Week
   const db = _revenueDb
   try {
     const rows = await db.hr_weekly_revenue.list({ limit: 500 })
-    return ((rows || []) as WeeklyRevenueReport[])
+    const filtered = ((rows || []) as WeeklyRevenueReport[])
       .filter((r) => {
         const ws = (r as any).weekStart || (r as any).week_start || ''
         return ws === weekStart && r.status !== 'init'
       })
-      .sort((a, b) => b.totalRevenue - a.totalRevenue)
+
+    // Deduplicate: if the DB has multiple rows for the same staff member + week
+    // (can happen from race conditions or double-inserts), keep only the most
+    // recently updated one per staffId.
+    const byStaff = new Map<string, WeeklyRevenueReport>()
+    for (const r of filtered) {
+      const sid = (r as any).staffId || (r as any).staff_id || ''
+      const existing = byStaff.get(sid)
+      if (!existing) {
+        byStaff.set(sid, r)
+      } else {
+        // Prefer submitted/reviewed over draft; otherwise prefer most recently updated
+        const rank = (s: string) => s === 'reviewed' ? 2 : s === 'submitted' ? 1 : 0
+        const rRank = rank(r.status)
+        const eRank = rank(existing.status)
+        const rTime = new Date(r.updatedAt || r.createdAt || 0).getTime()
+        const eTime = new Date(existing.updatedAt || existing.createdAt || 0).getTime()
+        if (rRank > eRank || (rRank === eRank && rTime > eTime)) {
+          byStaff.set(sid, r)
+        }
+      }
+    }
+
+    return Array.from(byStaff.values()).sort((a, b) => b.totalRevenue - a.totalRevenue)
   } catch (e) {
     console.warn('[getAllStaffReportsForWeek] failed:', e)
     return []
